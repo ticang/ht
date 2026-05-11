@@ -341,7 +341,8 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .cell-link:hover { text-decoration: underline; }
 .cell-actions { white-space: nowrap; }
-.cell-actions button {
+.cell-actions button,
+.cell-actions .action-link {
   background: transparent;
   border: 1px solid var(--border);
   cursor: pointer;
@@ -352,8 +353,10 @@ tbody tr:last-child td { border-bottom: none; }
   transition: all 0.2s;
   margin-right: 4px;
   font-family: 'Noto Sans SC', sans-serif;
+  text-decoration: none;
 }
-.cell-actions button:hover {
+.cell-actions button:hover,
+.cell-actions .action-link:hover {
   background: var(--blue-primary);
   color: #FFFFFF;
   border-color: var(--blue-primary);
@@ -544,8 +547,8 @@ tbody tr:last-child td { border-bottom: none; }
             <td><span class="status-badge review">内审</span></td>
             <td>2027-06-30</td>
             <td class="cell-actions">
-              <button>查看</button>
-              <button>编辑</button>
+              <a class="action-link" href="contract-detail.html">查看</a>
+              <a class="action-link" href="contract-diff.html">对比</a>
               <button>校验</button>
             </td>
           </tr>
@@ -559,8 +562,8 @@ tbody tr:last-child td { border-bottom: none; }
             <td><span class="status-badge signed">签署</span></td>
             <td>2026-12-31</td>
             <td class="cell-actions">
-              <button>查看</button>
-              <button>编辑</button>
+              <a class="action-link" href="contract-detail.html">查看</a>
+              <a class="action-link" href="contract-diff.html">对比</a>
               <button>校验</button>
             </td>
           </tr>
@@ -574,8 +577,8 @@ tbody tr:last-child td { border-bottom: none; }
             <td><span class="status-badge active">履行</span></td>
             <td>2027-03-01</td>
             <td class="cell-actions">
-              <button>查看</button>
-              <button>编辑</button>
+              <a class="action-link" href="contract-detail.html">查看</a>
+              <a class="action-link" href="contract-diff.html">对比</a>
               <button>校验</button>
             </td>
           </tr>
@@ -589,8 +592,8 @@ tbody tr:last-child td { border-bottom: none; }
             <td><span class="status-badge draft">草拟</span></td>
             <td style="color:var(--text-muted)">-</td>
             <td class="cell-actions">
-              <button>查看</button>
-              <button>编辑</button>
+              <a class="action-link" href="contract-detail.html">查看</a>
+              <a class="action-link" href="contract-diff.html">对比</a>
               <button>校验</button>
             </td>
           </tr>
@@ -604,8 +607,8 @@ tbody tr:last-child td { border-bottom: none; }
             <td><span class="status-badge revision">修订</span></td>
             <td>2026-09-15</td>
             <td class="cell-actions">
-              <button>查看</button>
-              <button>编辑</button>
+              <a class="action-link" href="contract-detail.html">查看</a>
+              <a class="action-link" href="contract-diff.html">对比</a>
               <button>校验</button>
             </td>
           </tr>

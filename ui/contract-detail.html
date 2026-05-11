@@ -232,6 +232,7 @@ body {
   cursor: pointer;
   transition: all 0.2s;
   font-family: 'Noto Sans SC', sans-serif;
+  text-decoration: none;
 }
 .btn-ghost:hover { border-color: var(--blue-primary); background: var(--blue-light); }
 .btn-primary {
@@ -248,6 +249,7 @@ body {
   cursor: pointer;
   transition: all 0.3s;
   font-family: 'Noto Sans SC', sans-serif;
+  text-decoration: none;
 }
 .btn-primary:hover { box-shadow: 0 4px 12px rgba(30, 85, 168, 0.3); transform: translateY(-1px); }
 
@@ -537,7 +539,9 @@ body {
         </div>
         <div class="header-actions">
           <button class="btn-ghost">编辑</button>
-          <button class="btn-primary">发起合规校验</button>
+          <a class="btn-primary" href="compliance.html">发起合规校验</a>
+          <a class="btn-ghost" href="contract-diff.html">版本对比</a>
+          <a class="btn-ghost" href="compliance-report.html">查看合规报告</a>
           <button class="btn-ghost">导出PDF</button>
         </div>
       </div>
