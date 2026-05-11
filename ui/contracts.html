@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>合同管理 - 合同管理 Agent</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@400;600;700&display=swap');
+:root {
+  --blue-primary: #1E55A8;
+  --blue-secondary: #3B82C4;
+  --blue-light: #E8F0FE;
+  --blue-lighter: #F0F4F8;
+  --blue-dark: #0D2B52;
+  --blue-gradient: linear-gradient(135deg, #1E55A8 0%, #2D6BC4 100%);
+  --sidebar-bg: #0D2B52;
+  --sidebar-active: rgba(255,255,255,0.12);
+  --surface: #FFFFFF;
+  --surface-hover: #F7F9FC;
+  --border: #D9E1EC;
+  --border-light: #E8EDF4;
+  --text-primary: #1A1A2E;
+  --text-secondary: #5A6478;
+  --text-muted: #8C95A6;
+  --red: #D4380D;
+  --gold: #D48806;
+  --green: #389E0D;
+  --radius: 8px;
+  --shadow: 0 2px 8px rgba(13, 43, 82, 0.08);
+  --shadow-lg: 0 4px 16px rgba(13, 43, 82, 0.12);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--blue-lighter);
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+.sidebar {
+  width: 240px;
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 100;
+}
+.sidebar-logo {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+}
+.sidebar-logo .logo-icon { width: 28px; height: 28px; flex-shrink: 0; }
+.sidebar-logo .logo-text {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: #FFFFFF;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.sidebar-separator {
+  height: 1px;
+  margin: 0 20px 8px;
+  background: linear-gradient(90deg, transparent, #D48806, transparent);
+}
+.sidebar-menu { flex: 1; padding: 8px 0; overflow-y: auto; }
+.menu-item {
+  display: flex;
+  align-items: center;
+  padding: 11px 20px;
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 14px;
+  gap: 12px;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  margin: 1px 0;
+}
+.menu-item:hover { color: rgba(255,255,255,0.9); background: var(--sidebar-active); }
+.menu-item.active {
+  color: #FFFFFF;
+  background: var(--sidebar-active);
+  border-left-color: #FFFFFF;
+}
+.menu-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.7; }
+.menu-item.active svg { opacity: 1; }
+.sidebar-footer {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sidebar-footer .avatar {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #FFFFFF;
+  flex-shrink: 0;
+}
+.sidebar-footer .user-info { flex: 1; }
+.sidebar-footer .user-info .name { font-size: 14px; color: rgba(255,255,255,0.9); }
+.sidebar-footer .user-info .logout { font-size: 12px; color: rgba(255,255,255,0.4); cursor: pointer; transition: color 0.2s; }
+.sidebar-footer .user-info .logout:hover { color: rgba(255,255,255,0.7); }
+
+/* ===== Main ===== */
+.main {
+  margin-left: 240px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ===== Top bar ===== */
+.topbar {
+  height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.breadcrumb a { color: var(--blue-primary); text-decoration: none; transition: color 0.2s; }
+.breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb .sep { color: var(--blue-primary); font-size: 12px; }
+.breadcrumb .current { color: var(--text-secondary); }
+.topbar-right { display: flex; align-items: center; gap: 16px; }
+.topbar-right .icon-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s;
+  color: var(--text-secondary);
+}
+.topbar-right .icon-btn:hover { background: var(--blue-lighter); color: var(--blue-primary); }
+.topbar-right .icon-btn svg { width: 18px; height: 18px; }
+.topbar-right .badge-dot {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 8px; height: 8px;
+  background: var(--red);
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+}
+.topbar-right .avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--blue-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #FFFFFF;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ===== Content ===== */
+.content { flex: 1; padding: 24px 28px; }
+
+/* ===== Page header ===== */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.page-header h2 {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  background: var(--blue-gradient);
+  color: #FFFFFF;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.btn-primary:hover { box-shadow: 0 4px 12px rgba(30, 85, 168, 0.3); transform: translateY(-1px); }
+.btn-primary svg { width: 14px; height: 14px; }
+
+/* ===== Status filter pills ===== */
+.status-pills {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--blue-lighter);
+  color: var(--text-primary);
+  border: 1px solid transparent;
+}
+.pill:hover { color: var(--blue-primary); border-color: var(--blue-primary); }
+.pill.active {
+  background: var(--blue-primary);
+  color: #FFFFFF;
+  border-color: var(--blue-primary);
+}
+.pill .count {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* ===== Filter row ===== */
+.filter-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.filter-row input[type="text"] {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--text-primary);
+  outline: none;
+  transition: all 0.2s;
+  background: var(--surface);
+  width: 260px;
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.filter-row input[type="text"]:focus { border-color: var(--blue-primary); box-shadow: 0 0 0 3px rgba(30, 85, 168, 0.1); }
+.filter-row input[type="text"]::placeholder { color: var(--text-muted); }
+.filter-row select {
+  padding: 8px 32px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--text-primary);
+  outline: none;
+  background: var(--surface);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235A6478' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  font-family: 'Noto Sans SC', sans-serif;
+  transition: border-color 0.2s;
+}
+.filter-row select:focus { border-color: var(--blue-primary); }
+.filter-row select option { background: var(--surface); color: var(--text-primary); }
+.filter-row input[type="date"] {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--text-primary);
+  outline: none;
+  background: var(--surface);
+  font-family: 'Noto Sans SC', sans-serif;
+  transition: border-color 0.2s;
+}
+.filter-row input[type="date"]:focus { border-color: var(--blue-primary); }
+.date-sep {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ===== Table card ===== */
+.table-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  background: var(--blue-light);
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 500;
+  color: var(--blue-primary);
+  font-size: 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+tbody td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 14px;
+  color: var(--text-primary);
+}
+tbody tr { transition: background 0.15s; }
+tbody tr:hover { background: var(--surface-hover); }
+tbody tr:last-child td { border-bottom: none; }
+.cell-checkbox { width: 44px; text-align: center; }
+.cell-checkbox input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--blue-primary); }
+.cell-link {
+  color: var(--blue-primary);
+  text-decoration: none;
+  transition: color 0.2s;
+  font-weight: 500;
+}
+.cell-link:hover { text-decoration: underline; }
+.cell-actions { white-space: nowrap; }
+.cell-actions button {
+  background: transparent;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  color: var(--blue-primary);
+  font-size: 13px;
+  transition: all 0.2s;
+  margin-right: 4px;
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.cell-actions button:hover {
+  background: var(--blue-primary);
+  color: #FFFFFF;
+  border-color: var(--blue-primary);
+}
+
+/* ===== Status badges ===== */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.status-badge.draft { background: #F0F0F0; color: #8C8C8C; }
+.status-badge.review { background: #FFF7E6; color: #D48806; }
+.status-badge.revision { background: #FFF2E8; color: #D4380D; }
+.status-badge.signed { background: #F6FFED; color: #389E0D; }
+.status-badge.active { background: #E8F0FE; color: #1E55A8; }
+.status-badge.archived { background: #F0F0F0; color: #5A6478; }
+
+/* ===== Pagination ===== */
+.pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border-light);
+}
+.pagination-info { color: var(--text-muted); font-size: 13px; }
+.pagination { display: flex; align-items: center; gap: 4px; }
+.pagination button {
+  min-width: 32px; height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.pagination button:hover:not(.disabled):not(:disabled) {
+  color: var(--blue-primary);
+  border-color: var(--blue-primary);
+}
+.pagination button.active {
+  background: var(--blue-primary);
+  color: #FFFFFF;
+  border-color: var(--blue-primary);
+  font-weight: 500;
+}
+.pagination button.disabled,
+.pagination button:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <svg class="logo-icon" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M14 2L4 7v6c0 6.55 4.27 12.69 10 14 5.73-1.31 10-7.45 10-14V7L14 2z" fill="#FFFFFF" opacity="0.9"/>
+      <path d="M14 5L7 8.5v4.5c0 4.9 3 9.5 7 10.5 4-1 7-5.6 7-10.5V8.5L14 5z" fill="none" stroke="#0D2B52" stroke-width="1"/>
+      <path d="M11 13l2 2 4-4" fill="none" stroke="#0D2B52" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="logo-text">合同管理 Agent</span>
+  </div>
+  <div class="sidebar-separator"></div>
+  <div class="sidebar-menu">
+    <a class="menu-item" href="dashboard.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      工作台
+    </a>
+    <a class="menu-item active" href="contracts.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      合同管理
+    </a>
+    <a class="menu-item" href="compliance.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      合规校验
+    </a>
+    <a class="menu-item" href="regulations.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+      法规知识库
+    </a>
+    <a class="menu-item" href="settings.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      系统设置
+    </a>
+  </div>
+  <div class="sidebar-footer">
+    <div class="avatar">管</div>
+    <div class="user-info">
+      <div class="name">管理员</div>
+      <div class="logout">退出登录</div>
+    </div>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="breadcrumb">
+      <a href="dashboard.html">首页</a>
+      <span class="sep">&gt;</span>
+      <span class="current">合同管理</span>
+    </div>
+    <div class="topbar-right">
+      <div class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+        <span class="badge-dot"></span>
+      </div>
+      <div class="avatar">管</div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    <!-- Page header -->
+    <div class="page-header">
+      <h2>合同管理</h2>
+      <button class="btn-primary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新建合同
+      </button>
+    </div>
+
+    <!-- Status filter pills -->
+    <div class="status-pills">
+      <span class="pill active">全部 <span class="count">128</span></span>
+      <span class="pill">草拟 <span class="count">12</span></span>
+      <span class="pill">内审 <span class="count">8</span></span>
+      <span class="pill">修订 <span class="count">5</span></span>
+      <span class="pill">签署 <span class="count">23</span></span>
+      <span class="pill">履行 <span class="count">45</span></span>
+      <span class="pill">归档 <span class="count">35</span></span>
+    </div>
+
+    <!-- Filter row -->
+    <div class="filter-row">
+      <input type="text" placeholder="搜索合同编号、名称...">
+      <select>
+        <option>全部类型</option>
+        <option>采购合同</option>
+        <option>技术合同</option>
+        <option>租赁合同</option>
+        <option>劳动合同</option>
+        <option>服务合同</option>
+      </select>
+      <input type="date" value="2026-01-01">
+      <span class="date-sep">至</span>
+      <input type="date" value="2026-12-31">
+    </div>
+
+    <!-- Table -->
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th class="cell-checkbox"><input type="checkbox"></th>
+            <th>合同编号</th>
+            <th>合同名称</th>
+            <th>合同类型</th>
+            <th>甲方</th>
+            <th>金额(万元)</th>
+            <th>状态</th>
+            <th>到期日期</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="cell-checkbox"><input type="checkbox"></td>
+            <td><a class="cell-link" href="contract-detail.html">HT-2026-001</a></td>
+            <td>XX公司年度采购框架合同</td>
+            <td>采购合同</td>
+            <td>本公司</td>
+            <td>500.00</td>
+            <td><span class="status-badge review">内审</span></td>
+            <td>2027-06-30</td>
+            <td class="cell-actions">
+              <button>查看</button>
+              <button>编辑</button>
+              <button>校验</button>
+            </td>
+          </tr>
+          <tr>
+            <td class="cell-checkbox"><input type="checkbox"></td>
+            <td><a class="cell-link" href="contract-detail.html">HT-2026-002</a></td>
+            <td>技术开发服务合同</td>
+            <td>技术合同</td>
+            <td>本公司</td>
+            <td>120.00</td>
+            <td><span class="status-badge signed">签署</span></td>
+            <td>2026-12-31</td>
+            <td class="cell-actions">
+              <button>查看</button>
+              <button>编辑</button>
+              <button>校验</button>
+            </td>
+          </tr>
+          <tr>
+            <td class="cell-checkbox"><input type="checkbox"></td>
+            <td><a class="cell-link" href="contract-detail.html">HT-2026-003</a></td>
+            <td>办公场地租赁合同</td>
+            <td>租赁合同</td>
+            <td>本公司</td>
+            <td>36.00</td>
+            <td><span class="status-badge active">履行</span></td>
+            <td>2027-03-01</td>
+            <td class="cell-actions">
+              <button>查看</button>
+              <button>编辑</button>
+              <button>校验</button>
+            </td>
+          </tr>
+          <tr>
+            <td class="cell-checkbox"><input type="checkbox"></td>
+            <td><a class="cell-link" href="contract-detail.html">HT-2026-004</a></td>
+            <td>核心技术人员劳动合同</td>
+            <td>劳动合同</td>
+            <td>本公司</td>
+            <td style="color:var(--text-muted)">-</td>
+            <td><span class="status-badge draft">草拟</span></td>
+            <td style="color:var(--text-muted)">-</td>
+            <td class="cell-actions">
+              <button>查看</button>
+              <button>编辑</button>
+              <button>校验</button>
+            </td>
+          </tr>
+          <tr>
+            <td class="cell-checkbox"><input type="checkbox"></td>
+            <td><a class="cell-link" href="contract-detail.html">HT-2026-005</a></td>
+            <td>网络安全服务外包合同</td>
+            <td>服务合同</td>
+            <td>本公司</td>
+            <td>80.00</td>
+            <td><span class="status-badge revision">修订</span></td>
+            <td>2026-09-15</td>
+            <td class="cell-actions">
+              <button>查看</button>
+              <button>编辑</button>
+              <button>校验</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="pagination-row">
+        <div class="pagination-info">共 128 条记录</div>
+        <div class="pagination">
+          <button class="disabled">&lt;</button>
+          <button class="active">1</button>
+          <button>2</button>
+          <button>3</button>
+          <button disabled>...</button>
+          <button>10</button>
+          <button>&gt;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var pills = document.querySelectorAll('.pill');
+  pills.forEach(function(pill) {
+    pill.addEventListener('click', function() {
+      pills.forEach(function(p) { p.classList.remove('active'); });
+      this.classList.add('active');
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

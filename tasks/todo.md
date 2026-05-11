@@ -25,7 +25,7 @@
   - 动作：列出设计文档第 9.2/9.3 的页面与现有 HTML 文件的对应关系。
   - 验证：确认每个核心页面至少有一个对应 HTML 文件；缺口写入计划 review。
 
-- [ ] **步骤 2：统一侧边栏和主导航路径**
+- [x] **步骤 2：统一侧边栏和主导航路径**
   - 文件：`ui/dashboard.html`、`ui/contracts.html`、`ui/contract-detail.html`、`ui/contract-diff.html`、`ui/compliance.html`、`ui/compliance-report.html`、`ui/regulations.html`、`ui/settings.html`
   - 动作：仅修正核心导航的 `href="#"`、不一致品牌名、当前页高亮和返回路径。
   - 验证：运行 `rg -n 'href="#"|合同管理系统|合同管理Agent' ui`，确认剩余结果都是非核心占位或有明确原因。

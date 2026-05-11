@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>法规知识库 - 合同管理 Agent</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@400;600;700&display=swap');
+:root {
+  --blue-primary: #1E55A8;
+  --blue-secondary: #3B82C4;
+  --blue-light: #E8F0FE;
+  --blue-lighter: #F0F4F8;
+  --blue-dark: #0D2B52;
+  --blue-gradient: linear-gradient(135deg, #1E55A8 0%, #2D6BC4 100%);
+  --sidebar-bg: #0D2B52;
+  --surface: #FFFFFF;
+  --surface-hover: #F7F9FC;
+  --border: #D9E1EC;
+  --border-light: #E8EDF4;
+  --text-primary: #1A1A2E;
+  --text-secondary: #5A6478;
+  --text-muted: #8C95A6;
+  --red: #D4380D;
+  --red-bg: #FFF2E8;
+  --gold: #D48806;
+  --gold-bg: #FFFBE6;
+  --green: #389E0D;
+  --green-bg: #F6FFED;
+  --radius: 8px;
+  --shadow: 0 2px 8px rgba(13, 43, 82, 0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--blue-lighter);
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+.sidebar {
+  width: 240px;
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 100;
+}
+.sidebar-logo {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.sidebar-logo .logo-icon svg { width: 28px; height: 28px; }
+.sidebar-logo .logo-text {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: #FFFFFF;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+.sidebar-menu {
+  flex: 1;
+  padding: 12px 0;
+  overflow-y: auto;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+  gap: 10px;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  margin: 2px 0;
+}
+.menu-item:hover {
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.05);
+}
+.menu-item.active {
+  color: #FFFFFF;
+  background: rgba(30,85,168,0.4);
+  border-left-color: #5B9BD5;
+}
+.menu-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.7; }
+.menu-item.active svg { opacity: 1; }
+.menu-item .menu-label { flex: 1; }
+.sidebar-footer {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-footer .avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.7);
+  flex-shrink: 0;
+}
+.sidebar-footer .user-info { flex: 1; }
+.sidebar-footer .user-info .name { font-size: 13px; color: rgba(255,255,255,0.85); }
+.sidebar-footer .user-info .role { font-size: 11px; color: rgba(255,255,255,0.45); }
+
+/* ===== Main ===== */
+.main {
+  margin-left: 240px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ===== Topbar ===== */
+.topbar {
+  height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.topbar-breadcrumb {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.topbar-breadcrumb a {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.topbar-breadcrumb a:hover { color: var(--blue-primary); }
+.topbar-breadcrumb .sep { margin: 0 6px; color: var(--border); }
+.topbar-breadcrumb .current { color: var(--text-primary); font-weight: 500; }
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.topbar-right .icon-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--blue-lighter);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+.topbar-right .icon-btn:hover { background: var(--blue-light); }
+.topbar-right .icon-btn svg { width: 18px; height: 18px; color: var(--text-secondary); }
+
+/* ===== Content ===== */
+.content {
+  flex: 1;
+  padding: 28px;
+}
+
+.page-title {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 20px;
+}
+
+/* ===== Action Row ===== */
+.action-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.btn-outline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  background: transparent;
+  color: var(--blue-primary);
+  border: 1px solid var(--blue-primary);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-outline:hover { background: var(--blue-light); }
+.btn-outline svg { width: 16px; height: 16px; }
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-ghost:hover { background: var(--surface-hover); }
+.btn-ghost svg { width: 16px; height: 16px; }
+
+/* ===== Filter Tabs ===== */
+.filter-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  transition: all 0.2s;
+}
+.filter-tab:hover {
+  border-color: var(--blue-secondary);
+  color: var(--blue-primary);
+}
+.filter-tab.active {
+  background: var(--blue-primary);
+  color: #FFFFFF;
+  border-color: var(--blue-primary);
+}
+.filter-tab .tab-count {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* ===== Search Bar ===== */
+.search-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  align-items: center;
+}
+.search-input-wrap {
+  flex: 1;
+  position: relative;
+}
+.search-input-wrap input {
+  width: 100%;
+  padding: 10px 14px 10px 40px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  outline: none;
+}
+.search-input-wrap input:focus {
+  border-color: var(--blue-primary);
+  box-shadow: 0 0 0 3px rgba(30,85,168,0.1);
+}
+.search-input-wrap input::placeholder { color: var(--text-muted); }
+.search-input-wrap .search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+}
+.search-input-wrap .search-icon svg { width: 18px; height: 18px; }
+
+/* Segmented control */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.segmented-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-family: inherit;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.segmented-btn.active {
+  background: var(--blue-primary);
+  color: #FFFFFF;
+}
+.segmented-btn:not(.active):hover {
+  background: var(--surface-hover);
+}
+
+/* ===== Table ===== */
+.table-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+.table-card table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table-card th {
+  background: var(--blue-lighter);
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.table-card td {
+  padding: 12px 16px;
+  font-size: 14px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-light);
+}
+.table-card tr:last-child td { border-bottom: none; }
+.table-card tr:hover td { background: var(--surface-hover); }
+
+/* Type tags */
+.type-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.type-tag.tag-law {
+  background: var(--blue-light);
+  color: var(--blue-primary);
+}
+.type-tag.tag-admin {
+  background: var(--blue-lighter);
+  color: var(--text-secondary);
+}
+.type-tag.tag-dept {
+  background: #F0F0F0;
+  color: var(--text-muted);
+}
+.type-tag.tag-judicial {
+  background: #F3E8FF;
+  color: #7C3AED;
+}
+
+/* Status */
+.status-effective {
+  color: var(--green);
+  font-weight: 500;
+}
+.status-repealed {
+  color: var(--red);
+  font-weight: 500;
+}
+.status-pending {
+  color: var(--gold);
+  font-weight: 500;
+}
+
+/* Action links */
+.action-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--blue-primary);
+  text-decoration: none;
+  font-size: 13px;
+  margin-right: 12px;
+  transition: opacity 0.2s;
+}
+.action-link:hover { opacity: 0.8; }
+.action-link svg { width: 14px; height: 14px; }
+
+/* ===== Bottom Bar ===== */
+.bottom-bar {
+  padding: 12px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 24px;
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M14 2L3 8v6c0 6.55 4.7 12.67 11 14 6.3-1.33 11-7.45 11-14V8L14 2z" fill="#3B82C4" opacity="0.9"/>
+        <path d="M14 2L3 8v6c0 6.55 4.7 12.67 11 14 6.3-1.33 11-7.45 11-14V8L14 2z" stroke="#5B9BD5" stroke-width="1.5" fill="none"/>
+        <path d="M12 14.5l2 2 4-4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <span class="logo-text">合同管理 Agent</span>
+  </div>
+
+  <div class="sidebar-menu">
+    <a class="menu-item" href="dashboard.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="11" y="2" width="5" height="5" rx="1"/><rect x="2" y="11" width="5" height="5" rx="1"/><rect x="11" y="11" width="5" height="5" rx="1"/></svg>
+      <span class="menu-label">工作台</span>
+    </a>
+    <a class="menu-item" href="contracts.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 2h7l4 4v9a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z"/><polyline points="11,2 11,6 15,6"/></svg>
+      <span class="menu-label">合同管理</span>
+    </a>
+    <a class="menu-item" href="compliance.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 1L2 5v4c0 4.4 3 8.5 7 9.5 4-1 7-5.1 7-9.5V5L9 1z"/><polyline points="6.5,9 8.5,11 12,7.5"/></svg>
+      <span class="menu-label">合规校验</span>
+    </a>
+    <a class="menu-item active" href="regulations.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h12a1 1 0 011 1v12a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z"/><line x1="6" y1="5" x2="12" y2="5"/><line x1="6" y1="8" x2="12" y2="8"/><line x1="6" y1="11" x2="10" y2="11"/></svg>
+      <span class="menu-label">法规知识库</span>
+    </a>
+    <a class="menu-item" href="settings.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="3"/><path d="M9 1v2m0 12v2M1 9h2m12 0h2M3.3 3.3l1.4 1.4m8.6 8.6l1.4 1.4M3.3 14.7l1.4-1.4m8.6-8.6l1.4-1.4"/></svg>
+      <span class="menu-label">系统设置</span>
+    </a>
+  </div>
+
+  <div class="sidebar-footer">
+    <div class="avatar">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="6" r="3"/><path d="M3 16c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+    </div>
+    <div class="user-info">
+      <div class="name">张明</div>
+      <div class="role">法务专员</div>
+    </div>
+  </div>
+</nav>
+
+<!-- Main -->
+<div class="main">
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="topbar-breadcrumb">
+      <a href="dashboard.html">首页</a>
+      <span class="sep">/</span>
+      <span class="current">法规知识库</span>
+    </div>
+    <div class="topbar-right">
+      <button class="icon-btn" title="通知">
+        <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 7.5a4.5 4.5 0 00-9 0c0 5-2.25 6.5-2.25 6.5h13.5S13.5 12.5 13.5 7.5z"/><path d="M10.3 15.5a1.5 1.5 0 01-2.6 0"/></svg>
+      </button>
+      <button class="icon-btn" title="帮助">
+        <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="7"/><path d="M7 7a2 2 0 013.5 1.5c0 1.5-2 1.5-2 3"/><circle cx="9" cy="13.5" r="0.5" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Content -->
+  <div class="content">
+    <h1 class="page-title">法规知识库</h1>
+
+    <!-- Action Row -->
+    <div class="action-row">
+      <button class="btn-outline">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8h10M8 3v10"/><path d="M2 13v1h12v-1" transform="translate(0,-2)"/><circle cx="8" cy="8" r="6" stroke-dasharray="3 2"/></svg>
+        同步官方法规
+      </button>
+      <button class="btn-ghost">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 11V3m0 0L5 6m3-3l3 3"/><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/></svg>
+        上传文件
+      </button>
+    </div>
+
+    <!-- Filter Tabs -->
+    <div class="filter-tabs">
+      <button class="filter-tab active">
+        全部 <span class="tab-count">2,350</span>
+      </button>
+      <button class="filter-tab">
+        法律 <span class="tab-count">280</span>
+      </button>
+      <button class="filter-tab">
+        行政法规 <span class="tab-count">520</span>
+      </button>
+      <button class="filter-tab">
+        部门规章 <span class="tab-count">1,350</span>
+      </button>
+      <button class="filter-tab">
+        司法解释 <span class="tab-count">200</span>
+      </button>
+    </div>
+
+    <!-- Search Row -->
+    <div class="search-row">
+      <div class="search-input-wrap">
+        <span class="search-icon">
+          <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><line x1="12.5" y1="12.5" x2="16" y2="16"/></svg>
+        </span>
+        <input type="text" placeholder="搜索法规名称、内容或关键词...">
+      </div>
+      <div class="segmented">
+        <button class="segmented-btn active">语义搜索</button>
+        <button class="segmented-btn">关键词</button>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>法规名称</th>
+            <th>类型</th>
+            <th>发布机关</th>
+            <th>发布日期</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>中华人民共和国民法典</td>
+            <td><span class="type-tag tag-law">法律</span></td>
+            <td>全国人民代表大会</td>
+            <td>2020-05-28</td>
+            <td><span class="status-effective">&#10003; 有效</span></td>
+            <td>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 2h10v10H2z"/><path d="M5 5h4M5 7h4M5 9h2"/></svg>
+                查看
+              </a>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4"/><line x1="9" y1="9" x2="12.5" y2="12.5"/></svg>
+                搜索
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>中华人民共和国劳动合同法</td>
+            <td><span class="type-tag tag-law">法律</span></td>
+            <td>全国人民代表大会</td>
+            <td>2007-06-29</td>
+            <td><span class="status-effective">&#10003; 有效</span></td>
+            <td>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 2h10v10H2z"/><path d="M5 5h4M5 7h4M5 9h2"/></svg>
+                查看
+              </a>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4"/><line x1="9" y1="9" x2="12.5" y2="12.5"/></svg>
+                搜索
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>公司法（2023修订）</td>
+            <td><span class="type-tag tag-law">法律</span></td>
+            <td>全国人民代表大会</td>
+            <td>2023-12-29</td>
+            <td><span class="status-effective">&#10003; 有效</span></td>
+            <td>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 2h10v10H2z"/><path d="M5 5h4M5 7h4M5 9h2"/></svg>
+                查看
+              </a>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4"/><line x1="9" y1="9" x2="12.5" y2="12.5"/></svg>
+                搜索
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>政府采购法</td>
+            <td><span class="type-tag tag-law">法律</span></td>
+            <td>全国人民代表大会</td>
+            <td>2002-06-29</td>
+            <td><span class="status-effective">&#10003; 有效</span></td>
+            <td>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 2h10v10H2z"/><path d="M5 5h4M5 7h4M5 9h2"/></svg>
+                查看
+              </a>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4"/><line x1="9" y1="9" x2="12.5" y2="12.5"/></svg>
+                搜索
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>合同违法行为监督处理办法</td>
+            <td><span class="type-tag tag-dept">部门规章</span></td>
+            <td>国家市场监督管理总局</td>
+            <td>2020-12-31</td>
+            <td><span class="status-effective">&#10003; 有效</span></td>
+            <td>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 2h10v10H2z"/><path d="M5 5h4M5 7h4M5 9h2"/></svg>
+                查看
+              </a>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4"/><line x1="9" y1="9" x2="12.5" y2="12.5"/></svg>
+                搜索
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>废止法规示例</td>
+            <td><span class="type-tag tag-admin">行政法规</span></td>
+            <td>国务院</td>
+            <td>2010-01-01</td>
+            <td><span class="status-repealed">&#10007; 废止</span></td>
+            <td>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 2h10v10H2z"/><path d="M5 5h4M5 7h4M5 9h2"/></svg>
+                查看
+              </a>
+              <a class="action-link" href="#">
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="4"/><line x1="9" y1="9" x2="12.5" y2="12.5"/></svg>
+                搜索
+              </a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Bottom Bar -->
+    <div class="bottom-bar">
+      <span>共 2,350 条法规</span>
+      <span>|</span>
+      <span>最后同步: 2026-05-10 02:00</span>
+      <span>|</span>
+      <span>数据源: 国家法律法规数据库</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

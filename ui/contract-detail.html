@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>合同详情 - 合同管理 Agent</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@400;600;700&display=swap');
+:root {
+  --blue-primary: #1E55A8;
+  --blue-secondary: #3B82C4;
+  --blue-light: #E8F0FE;
+  --blue-lighter: #F0F4F8;
+  --blue-dark: #0D2B52;
+  --blue-gradient: linear-gradient(135deg, #1E55A8 0%, #2D6BC4 100%);
+  --sidebar-bg: #0D2B52;
+  --sidebar-active: rgba(255,255,255,0.12);
+  --surface: #FFFFFF;
+  --surface-hover: #F7F9FC;
+  --border: #D9E1EC;
+  --border-light: #E8EDF4;
+  --text-primary: #1A1A2E;
+  --text-secondary: #5A6478;
+  --text-muted: #8C95A6;
+  --red: #D4380D;
+  --gold: #D48806;
+  --green: #389E0D;
+  --radius: 8px;
+  --shadow: 0 2px 8px rgba(13, 43, 82, 0.08);
+  --shadow-lg: 0 4px 16px rgba(13, 43, 82, 0.12);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--blue-lighter);
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+.sidebar {
+  width: 240px;
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 100;
+}
+.sidebar-logo {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+}
+.sidebar-logo .logo-icon { width: 28px; height: 28px; flex-shrink: 0; }
+.sidebar-logo .logo-text {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: #FFFFFF;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.sidebar-separator {
+  height: 1px;
+  margin: 0 20px 8px;
+  background: linear-gradient(90deg, transparent, #D48806, transparent);
+}
+.sidebar-menu { flex: 1; padding: 8px 0; overflow-y: auto; }
+.menu-item {
+  display: flex;
+  align-items: center;
+  padding: 11px 20px;
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 14px;
+  gap: 12px;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  margin: 1px 0;
+}
+.menu-item:hover { color: rgba(255,255,255,0.9); background: var(--sidebar-active); }
+.menu-item.active {
+  color: #FFFFFF;
+  background: var(--sidebar-active);
+  border-left-color: #FFFFFF;
+}
+.menu-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.7; }
+.menu-item.active svg { opacity: 1; }
+.sidebar-footer {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sidebar-footer .avatar {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #FFFFFF;
+  flex-shrink: 0;
+}
+.sidebar-footer .user-info { flex: 1; }
+.sidebar-footer .user-info .name { font-size: 14px; color: rgba(255,255,255,0.9); }
+.sidebar-footer .user-info .logout { font-size: 12px; color: rgba(255,255,255,0.4); cursor: pointer; transition: color 0.2s; }
+.sidebar-footer .user-info .logout:hover { color: rgba(255,255,255,0.7); }
+
+/* ===== Main ===== */
+.main {
+  margin-left: 240px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ===== Top bar ===== */
+.topbar {
+  height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.breadcrumb a { color: var(--blue-primary); text-decoration: none; transition: color 0.2s; }
+.breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb .sep { color: var(--blue-primary); font-size: 12px; }
+.breadcrumb .current { color: var(--text-secondary); }
+.topbar-right { display: flex; align-items: center; gap: 16px; }
+.topbar-right .icon-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s;
+  color: var(--text-secondary);
+}
+.topbar-right .icon-btn:hover { background: var(--blue-lighter); color: var(--blue-primary); }
+.topbar-right .icon-btn svg { width: 18px; height: 18px; }
+.topbar-right .badge-dot {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 8px; height: 8px;
+  background: var(--red);
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+}
+.topbar-right .avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--blue-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #FFFFFF;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ===== Content ===== */
+.content { flex: 1; padding: 24px 28px; }
+
+/* ===== Contract info card ===== */
+.contract-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 28px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-lg);
+}
+.contract-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+.contract-header .title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.contract-header h2 {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.status-badge.review { background: #FFF7E6; color: #D48806; }
+.header-actions { display: flex; gap: 10px; }
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 18px;
+  background: transparent;
+  color: var(--blue-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.btn-ghost:hover { border-color: var(--blue-primary); background: var(--blue-light); }
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 18px;
+  background: var(--blue-gradient);
+  color: #FFFFFF;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: 'Noto Sans SC', sans-serif;
+}
+.btn-primary:hover { box-shadow: 0 4px 12px rgba(30, 85, 168, 0.3); transform: translateY(-1px); }
+
+/* ===== Info grid ===== */
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 48px;
+}
+.info-item {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+}
+.info-item .label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  min-width: 72px;
+  flex-shrink: 0;
+}
+.info-item .value {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* ===== Detail tabs ===== */
+.detail-tabs {
+  display: flex;
+  gap: 0;
+  background: var(--surface);
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  box-shadow: var(--shadow);
+}
+.detail-tab {
+  padding: 13px 22px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 14px;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+.detail-tab:hover { color: var(--blue-primary); }
+.detail-tab.active {
+  color: var(--blue-primary);
+  border-bottom-color: var(--blue-primary);
+  font-weight: 500;
+}
+
+/* ===== Tab content ===== */
+.tab-content {
+  background: var(--surface);
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 24px;
+  display: flex;
+  gap: 24px;
+  min-height: 400px;
+  box-shadow: var(--shadow);
+}
+.tab-content.hidden { display: none; }
+
+/* ===== Document outline ===== */
+.doc-outline {
+  width: 200px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-light);
+  padding-right: 16px;
+  position: relative;
+}
+.doc-outline::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  top: 40px;
+  bottom: 20px;
+  width: 2px;
+  background: var(--blue-primary);
+  opacity: 0.15;
+  border-radius: 1px;
+}
+.doc-outline h4 {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-light);
+}
+.outline-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+  text-decoration: none;
+  margin-bottom: 2px;
+}
+.outline-item:hover { color: var(--text-primary); background: var(--surface-hover); }
+.outline-item.active { color: var(--blue-primary); background: var(--blue-light); }
+.outline-item::before {
+  content: '';
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.outline-item:hover::before { background: var(--text-muted); }
+.outline-item.active::before { background: var(--blue-primary); box-shadow: 0 0 0 3px rgba(30, 85, 168, 0.15); }
+
+/* ===== Contract text ===== */
+.contract-text { flex: 1; line-height: 1.9; }
+.contract-text .section { margin-bottom: 24px; }
+.contract-text .section-title {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  padding-left: 12px;
+  border-left: 3px solid var(--blue-primary);
+  line-height: 1.5;
+}
+.contract-text .section-body {
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-indent: 2em;
+  line-height: 2;
+}
+
+/* ===== Version history ===== */
+.version-section { width: 100%; }
+.version-heading {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 24px;
+}
+.timeline { padding: 0; }
+.timeline-item {
+  display: flex;
+  gap: 16px;
+  padding-bottom: 28px;
+  position: relative;
+}
+.timeline-item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 28px;
+  bottom: 0;
+  width: 2px;
+  background: var(--blue-primary);
+  opacity: 0.2;
+}
+.timeline-dot {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.timeline-dot.current {
+  background: var(--blue-primary);
+  color: #FFFFFF;
+  box-shadow: 0 0 0 4px rgba(30, 85, 168, 0.15);
+}
+.timeline-dot.past {
+  background: var(--blue-light);
+  color: var(--blue-primary);
+  border: 2px solid var(--blue-primary);
+  opacity: 0.5;
+}
+.timeline-content { flex: 1; }
+.timeline-content .version-label {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.timeline-content .current-tag {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--blue-primary);
+  background: var(--blue-light);
+  border: 1px solid rgba(30, 85, 168, 0.2);
+  padding: 1px 8px;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+.timeline-content .version-time {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.timeline-content .version-desc {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-top: 6px;
+  line-height: 1.6;
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <svg class="logo-icon" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M14 2L4 7v6c0 6.55 4.27 12.69 10 14 5.73-1.31 10-7.45 10-14V7L14 2z" fill="#FFFFFF" opacity="0.9"/>
+      <path d="M14 5L7 8.5v4.5c0 4.9 3 9.5 7 10.5 4-1 7-5.6 7-10.5V8.5L14 5z" fill="none" stroke="#0D2B52" stroke-width="1"/>
+      <path d="M11 13l2 2 4-4" fill="none" stroke="#0D2B52" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="logo-text">合同管理 Agent</span>
+  </div>
+  <div class="sidebar-separator"></div>
+  <div class="sidebar-menu">
+    <a class="menu-item" href="dashboard.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      工作台
+    </a>
+    <a class="menu-item active" href="contracts.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      合同管理
+    </a>
+    <a class="menu-item" href="compliance.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      合规校验
+    </a>
+    <a class="menu-item" href="regulations.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+      法规知识库
+    </a>
+    <a class="menu-item" href="settings.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      系统设置
+    </a>
+  </div>
+  <div class="sidebar-footer">
+    <div class="avatar">管</div>
+    <div class="user-info">
+      <div class="name">管理员</div>
+      <div class="logout">退出登录</div>
+    </div>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="breadcrumb">
+      <a href="dashboard.html">首页</a>
+      <span class="sep">&gt;</span>
+      <a href="contracts.html">合同管理</a>
+      <span class="sep">&gt;</span>
+      <span class="current">XX公司年度采购框架合同</span>
+    </div>
+    <div class="topbar-right">
+      <div class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+        <span class="badge-dot"></span>
+      </div>
+      <div class="avatar">管</div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    <!-- Contract info card -->
+    <div class="contract-card">
+      <div class="contract-header">
+        <div class="title-row">
+          <h2>XX公司年度采购框架合同</h2>
+          <span class="status-badge review">内审</span>
+        </div>
+        <div class="header-actions">
+          <button class="btn-ghost">编辑</button>
+          <button class="btn-primary">发起合规校验</button>
+          <button class="btn-ghost">导出PDF</button>
+        </div>
+      </div>
+      <div class="info-grid">
+        <div class="info-item"><span class="label">合同编号</span><span class="value">HT-2026-001</span></div>
+        <div class="info-item"><span class="label">乙方</span><span class="value">XX科技有限公司</span></div>
+        <div class="info-item"><span class="label">合同类型</span><span class="value">采购合同</span></div>
+        <div class="info-item"><span class="label">签署日期</span><span class="value">2026-05-10</span></div>
+        <div class="info-item"><span class="label">甲方</span><span class="value">本公司</span></div>
+        <div class="info-item"><span class="label">到期日期</span><span class="value">2027-06-30</span></div>
+        <div class="info-item"><span class="label">合同金额</span><span class="value">5,000,000.00</span></div>
+        <div class="info-item"><span class="label">创建人</span><span class="value">管理员</span></div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="detail-tabs">
+      <div class="detail-tab active" data-tab="content">合同内容</div>
+      <div class="detail-tab" data-tab="version">版本历史</div>
+      <div class="detail-tab" data-tab="clauses">条款详情</div>
+      <div class="detail-tab" data-tab="report">合规报告</div>
+    </div>
+
+    <!-- Tab: Contract content -->
+    <div class="tab-content" id="tab-content">
+      <div class="doc-outline">
+        <h4>文档目录</h4>
+        <a class="outline-item active">第一条 合同标的</a>
+        <a class="outline-item">第二条 合同金额</a>
+        <a class="outline-item">第三条 交付条款</a>
+        <a class="outline-item">第四条 付款方式</a>
+        <a class="outline-item">第五条 违约责任</a>
+        <a class="outline-item">第六条 保密条款</a>
+        <a class="outline-item">第七条 争议解决</a>
+        <a class="outline-item">第八条 合同期限</a>
+      </div>
+      <div class="contract-text">
+        <div class="section">
+          <div class="section-title">第一条 合同标的</div>
+          <div class="section-body">甲方委托乙方提供年度采购服务，包括但不限于电子元器件、办公用品及生产物料的集中采购。乙方应按照甲方提交的采购需求，在约定时间内完成询价、比价、采购及交付工作。采购标的的具体品名、规格、数量以甲方书面订单为准。</div>
+        </div>
+        <div class="section">
+          <div class="section-title">第二条 合同金额</div>
+          <div class="section-body">本合同总金额为人民币伍佰万元整（5,000,000.00），为年度框架金额。实际结算金额以甲方实际下达订单累计金额为准，最终结算金额不超过本合同总金额。如因市场波动导致价格变动超过10%，双方应另行协商并签订补充协议。</div>
+        </div>
+        <div class="section">
+          <div class="section-title">第三条 交付条款</div>
+          <div class="section-body">乙方应在收到甲方书面订单后十五（15）个工作日内完成交付。交付地点为甲方指定的仓库或办公场所。乙方应确保所交付物品的品种、规格、数量与订单一致，并提供相应的质量检验报告及合格证书。</div>
+        </div>
+        <div class="section">
+          <div class="section-title">第四条 付款方式</div>
+          <div class="section-body">甲方在收到乙方交付的货物并验收合格后，于三十（30）个工作日内支付相应款项。付款方式为银行转账。乙方应在付款前向甲方开具等额增值税专用发票。如乙方未按时提供发票，甲方有权顺延付款期限。</div>
+        </div>
+        <div class="section">
+          <div class="section-title">第五条 违约责任</div>
+          <div class="section-body">任何一方违反本合同约定的，应当承担违约责任。乙方未按约定时间交付的，每延迟一日应向甲方支付合同金额0.05%的违约金，累计不超过合同总金额的5%。甲方未按约定时间付款的，每延迟一日应向乙方支付应付金额0.05%的滞纳金。</div>
+        </div>
+        <div class="section">
+          <div class="section-title">第六条 保密条款</div>
+          <div class="section-body">双方对在本合同签订和履行过程中知悉的对方商业秘密、技术秘密及其他保密信息，负有保密义务。未经对方书面同意，不得向任何第三方披露或用于本合同以外的目的。本保密义务在合同终止后三年内持续有效。</div>
+        </div>
+        <div class="section">
+          <div class="section-title">第七条 争议解决</div>
+          <div class="section-body">本合同的签订、履行、变更、解除和终止均适用中华人民共和国法律。因本合同引起的或与本合同有关的任何争议，双方应首先通过友好协商解决；协商不成的，任何一方均有权向甲方所在地有管辖权的人民法院提起诉讼。</div>
+        </div>
+        <div class="section">
+          <div class="section-title">第八条 合同期限</div>
+          <div class="section-body">本合同自双方授权代表签字并加盖公章之日起生效，有效期自2026年5月10日至2027年6月30日。合同期满前三十日，经双方协商一致，可续签合同。本合同一式四份，甲乙双方各执两份，具有同等法律效力。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Version history -->
+    <div class="tab-content hidden" id="tab-version">
+      <div class="version-section">
+        <h3 class="version-heading">版本历史</h3>
+        <div class="timeline">
+          <div class="timeline-item">
+            <div class="timeline-dot current">v3</div>
+            <div class="timeline-content">
+              <div class="version-label">v3 <span class="current-tag">当前版本</span></div>
+              <div class="version-time">2026-05-11 14:30 -- 管理员</div>
+              <div class="version-desc">修改违约金条款，将违约金比例由0.1%调整为0.05%</div>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-dot past">v2</div>
+            <div class="timeline-content">
+              <div class="version-label">v2</div>
+              <div class="version-time">2026-05-10 10:00 -- 管理员</div>
+              <div class="version-desc">增加保密条款（第六条），明确保密期限及保密范围</div>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="timeline-dot past">v1</div>
+            <div class="timeline-content">
+              <div class="version-label">v1</div>
+              <div class="version-time">2026-05-09 09:00 -- 管理员</div>
+              <div class="version-desc">初始版本，包含合同标的、金额、交付、付款等基本条款</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Clauses (placeholder) -->
+    <div class="tab-content hidden" id="tab-clauses">
+      <div class="version-section">
+        <h3 class="version-heading">条款详情</h3>
+        <p style="color: var(--text-muted); padding: 40px 0;">条款详情内容开发中...</p>
+      </div>
+    </div>
+
+    <!-- Tab: Compliance report (placeholder) -->
+    <div class="tab-content hidden" id="tab-report">
+      <div class="version-section">
+        <h3 class="version-heading">合规报告</h3>
+        <p style="color: var(--text-muted); padding: 40px 0;">合规报告内容开发中...</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var tabs = document.querySelectorAll('.detail-tab');
+  tabs.forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      var target = this.getAttribute('data-tab');
+      if (!target) return;
+      document.querySelectorAll('.detail-tab').forEach(function(t) { t.classList.remove('active'); });
+      this.classList.add('active');
+      var ids = ['content', 'version', 'clauses', 'report'];
+      ids.forEach(function(id) {
+        var el = document.getElementById('tab-' + id);
+        if (el) {
+          if (id === target) { el.classList.remove('hidden'); }
+          else { el.classList.add('hidden'); }
+        }
+      });
+    });
+  });
+
+  var outlineItems = document.querySelectorAll('.outline-item');
+  outlineItems.forEach(function(item) {
+    item.addEventListener('click', function() {
+      outlineItems.forEach(function(i) { i.classList.remove('active'); });
+      this.classList.add('active');
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

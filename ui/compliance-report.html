@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>合规报告 - 合同管理 Agent</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@400;600;700&display=swap');
+:root {
+  --blue-primary: #1E55A8;
+  --blue-secondary: #3B82C4;
+  --blue-light: #E8F0FE;
+  --blue-lighter: #F0F4F8;
+  --blue-dark: #0D2B52;
+  --blue-gradient: linear-gradient(135deg, #1E55A8 0%, #2D6BC4 100%);
+  --sidebar-bg: #0D2B52;
+  --surface: #FFFFFF;
+  --surface-hover: #F7F9FC;
+  --border: #D9E1EC;
+  --border-light: #E8EDF4;
+  --text-primary: #1A1A2E;
+  --text-secondary: #5A6478;
+  --text-muted: #8C95A6;
+  --red: #D4380D;
+  --red-bg: #FFF2E8;
+  --gold: #D48806;
+  --gold-bg: #FFFBE6;
+  --green: #389E0D;
+  --green-bg: #F6FFED;
+  --radius: 8px;
+  --shadow: 0 2px 8px rgba(13, 43, 82, 0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--blue-lighter);
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+.sidebar {
+  width: 240px;
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 100;
+}
+.sidebar-logo {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.sidebar-logo .logo-icon svg { width: 28px; height: 28px; }
+.sidebar-logo .logo-text {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: #FFFFFF;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+.sidebar-menu {
+  flex: 1;
+  padding: 12px 0;
+  overflow-y: auto;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+  gap: 10px;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  margin: 2px 0;
+}
+.menu-item:hover {
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.05);
+}
+.menu-item.active {
+  color: #FFFFFF;
+  background: rgba(30,85,168,0.4);
+  border-left-color: #5B9BD5;
+}
+.menu-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.7; }
+.menu-item.active svg { opacity: 1; }
+.menu-item .menu-label { flex: 1; }
+.sidebar-footer {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-footer .avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.7);
+  flex-shrink: 0;
+}
+.sidebar-footer .user-info { flex: 1; }
+.sidebar-footer .user-info .name { font-size: 13px; color: rgba(255,255,255,0.85); }
+.sidebar-footer .user-info .role { font-size: 11px; color: rgba(255,255,255,0.45); }
+
+/* ===== Main ===== */
+.main {
+  margin-left: 240px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ===== Topbar ===== */
+.topbar {
+  height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.topbar-breadcrumb {
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.topbar-breadcrumb a {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.topbar-breadcrumb a:hover { color: var(--blue-primary); }
+.topbar-breadcrumb .sep { color: var(--border); }
+.topbar-breadcrumb .current { color: var(--text-primary); font-weight: 500; }
+.btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 14px;
+  background: transparent;
+  color: var(--blue-primary);
+  border: 1px solid var(--blue-primary);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s;
+  text-decoration: none;
+}
+.btn-back:hover { background: var(--blue-light); }
+.btn-back svg { width: 14px; height: 14px; }
+
+/* ===== Content ===== */
+.content {
+  flex: 1;
+  padding: 28px;
+}
+
+/* ===== Summary Card ===== */
+.summary-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 28px;
+  margin-bottom: 24px;
+}
+.summary-title {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.summary-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 28px;
+}
+
+/* Gauge */
+.gauge-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 28px;
+}
+.gauge-svg {
+  width: 240px;
+  height: 130px;
+}
+.gauge-label {
+  margin-top: 8px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--gold);
+}
+
+/* Stats row */
+.stats-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  flex: 1;
+  padding: 16px 20px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.stat-card.stat-high {
+  background: var(--red-bg);
+  border-left: 3px solid var(--red);
+}
+.stat-card.stat-medium {
+  background: var(--gold-bg);
+  border-left: 3px solid var(--gold);
+}
+.stat-card.stat-low {
+  background: var(--green-bg);
+  border-left: 3px solid var(--green);
+}
+.stat-card .stat-num {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+}
+.stat-card.stat-high .stat-num { color: var(--red); }
+.stat-card.stat-medium .stat-num { color: var(--gold); }
+.stat-card.stat-low .stat-num { color: var(--green); }
+.stat-card .stat-label {
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Buttons row */
+.btn-row {
+  display: flex;
+  gap: 12px;
+}
+.btn-blue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  background: var(--blue-gradient);
+  color: #FFFFFF;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.btn-blue:hover { opacity: 0.92; }
+.btn-blue svg { width: 16px; height: 16px; }
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  background: transparent;
+  color: var(--blue-primary);
+  border: 1px solid var(--blue-primary);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-ghost:hover { background: var(--blue-light); }
+.btn-ghost svg { width: 16px; height: 16px; }
+
+/* ===== Risk Items ===== */
+.risk-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+.risk-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-bottom: 16px;
+  overflow: hidden;
+  border-left: 3px solid transparent;
+}
+.risk-card.risk-high { border-left-color: var(--red); }
+.risk-card.risk-medium { border-left-color: var(--gold); }
+.risk-card.risk-low { border-left-color: var(--green); }
+
+.risk-card-header {
+  display: flex;
+  align-items: center;
+  padding: 16px 20px;
+  gap: 10px;
+  border-bottom: 1px solid var(--border-light);
+}
+.risk-icon {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.risk-icon.icon-high { background: var(--red-bg); }
+.risk-icon.icon-medium { background: var(--gold-bg); }
+.risk-icon.icon-low { background: var(--green-bg); }
+.risk-icon svg { width: 14px; height: 14px; }
+.risk-icon.icon-high svg { color: var(--red); }
+.risk-icon.icon-medium svg { color: var(--gold); }
+.risk-icon.icon-low svg { color: var(--green); }
+
+.risk-card-header .risk-title {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.risk-card-header .risk-badge {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.risk-badge.badge-high { background: var(--red-bg); color: var(--red); }
+.risk-badge.badge-medium { background: var(--gold-bg); color: var(--gold); }
+.risk-badge.badge-low { background: var(--green-bg); color: var(--green); }
+
+.risk-card-header .status-select {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: var(--surface);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%235A6478' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+}
+
+.risk-card-body {
+  padding: 20px;
+}
+.risk-field {
+  margin-bottom: 16px;
+}
+.risk-field:last-child { margin-bottom: 0; }
+.risk-field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.risk-field-content {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.7;
+}
+.blockquote-box {
+  background: var(--blue-lighter);
+  border-left: 3px solid var(--blue-primary);
+  border-radius: 0 4px 4px 0;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.7;
+}
+.law-ref {
+  color: var(--blue-primary);
+  font-weight: 500;
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M14 2L3 8v6c0 6.55 4.7 12.67 11 14 6.3-1.33 11-7.45 11-14V8L14 2z" fill="#3B82C4" opacity="0.9"/>
+        <path d="M14 2L3 8v6c0 6.55 4.7 12.67 11 14 6.3-1.33 11-7.45 11-14V8L14 2z" stroke="#5B9BD5" stroke-width="1.5" fill="none"/>
+        <path d="M12 14.5l2 2 4-4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <span class="logo-text">合同管理 Agent</span>
+  </div>
+
+  <div class="sidebar-menu">
+    <a class="menu-item" href="dashboard.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="11" y="2" width="5" height="5" rx="1"/><rect x="2" y="11" width="5" height="5" rx="1"/><rect x="11" y="11" width="5" height="5" rx="1"/></svg>
+      <span class="menu-label">工作台</span>
+    </a>
+    <a class="menu-item" href="contracts.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 2h7l4 4v9a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z"/><polyline points="11,2 11,6 15,6"/></svg>
+      <span class="menu-label">合同管理</span>
+    </a>
+    <a class="menu-item active" href="compliance.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 1L2 5v4c0 4.4 3 8.5 7 9.5 4-1 7-5.1 7-9.5V5L9 1z"/><polyline points="6.5,9 8.5,11 12,7.5"/></svg>
+      <span class="menu-label">合规校验</span>
+    </a>
+    <a class="menu-item" href="regulations.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h12a1 1 0 011 1v12a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z"/><line x1="6" y1="5" x2="12" y2="5"/><line x1="6" y1="8" x2="12" y2="8"/><line x1="6" y1="11" x2="10" y2="11"/></svg>
+      <span class="menu-label">法规知识库</span>
+    </a>
+    <a class="menu-item" href="settings.html">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="3"/><path d="M9 1v2m0 12v2M1 9h2m12 0h2M3.3 3.3l1.4 1.4m8.6 8.6l1.4 1.4M3.3 14.7l1.4-1.4m8.6-8.6l1.4-1.4"/></svg>
+      <span class="menu-label">系统设置</span>
+    </a>
+  </div>
+
+  <div class="sidebar-footer">
+    <div class="avatar">
+      <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="6" r="3"/><path d="M3 16c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+    </div>
+    <div class="user-info">
+      <div class="name">张明</div>
+      <div class="role">法务专员</div>
+    </div>
+  </div>
+</nav>
+
+<!-- Main -->
+<div class="main">
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="topbar-breadcrumb">
+      <a href="dashboard.html">首页</a>
+      <span class="sep">/</span>
+      <a href="compliance.html">合规校验</a>
+      <span class="sep">/</span>
+      <span class="current">报告详情</span>
+    </div>
+    <a class="btn-back" href="compliance.html">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2L4 7l5 5"/></svg>
+      返回
+    </a>
+  </header>
+
+  <!-- Content -->
+  <div class="content">
+
+    <!-- Summary Card -->
+    <div class="summary-card">
+      <div class="summary-title">XX公司年度采购框架合同 - 合规报告</div>
+      <div class="summary-meta">报告ID: RPT-2026-015 | 校验时间: 2026-05-11 14:30</div>
+
+      <!-- Risk Gauge -->
+      <div class="gauge-container">
+        <svg class="gauge-svg" viewBox="0 0 240 130" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#389E0D"/>
+              <stop offset="40%" stop-color="#D48806"/>
+              <stop offset="70%" stop-color="#D48806"/>
+              <stop offset="100%" stop-color="#D4380D"/>
+            </linearGradient>
+          </defs>
+          <!-- Background arc -->
+          <path d="M 30 120 A 90 90 0 0 1 210 120" stroke="#E8EDF4" stroke-width="18" fill="none" stroke-linecap="round"/>
+          <!-- Colored arc -->
+          <path d="M 30 120 A 90 90 0 0 1 210 120" stroke="url(#gaugeGrad)" stroke-width="18" fill="none" stroke-linecap="round"/>
+          <!-- Tick marks -->
+          <line x1="30" y1="120" x2="36" y2="112" stroke="#8C95A6" stroke-width="1.5"/>
+          <line x1="210" y1="120" x2="204" y2="112" stroke="#8C95A6" stroke-width="1.5"/>
+          <line x1="120" y1="30" x2="120" y2="38" stroke="#8C95A6" stroke-width="1.5"/>
+          <!-- Labels -->
+          <text x="32" y="115" font-size="11" fill="#389E0D" font-family="Noto Sans SC" text-anchor="middle">低</text>
+          <text x="120" y="27" font-size="11" fill="#D48806" font-family="Noto Sans SC" text-anchor="middle">中</text>
+          <text x="208" y="115" font-size="11" fill="#D4380D" font-family="Noto Sans SC" text-anchor="middle">高</text>
+          <!-- Needle pointing to medium zone (~55% from left) -->
+          <line x1="120" y1="120" x2="147" y2="58" stroke="#1A1A2E" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="120" cy="120" r="6" fill="#1A1A2E"/>
+          <circle cx="120" cy="120" r="3" fill="#FFFFFF"/>
+        </svg>
+        <div class="gauge-label">中等风险</div>
+      </div>
+
+      <!-- Stats Row -->
+      <div class="stats-row">
+        <div class="stat-card stat-high">
+          <div class="stat-num">3</div>
+          <div class="stat-label">高风险</div>
+        </div>
+        <div class="stat-card stat-medium">
+          <div class="stat-num">2</div>
+          <div class="stat-label">中风险</div>
+        </div>
+        <div class="stat-card stat-low">
+          <div class="stat-num">1</div>
+          <div class="stat-label">低风险</div>
+        </div>
+      </div>
+
+      <!-- Buttons -->
+      <div class="btn-row">
+        <button class="btn-blue">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h10M8 2v8m0 0l-3-3m3 3l3-3"/><path d="M2 13v1h12v-1"/></svg>
+          导出PDF
+        </button>
+        <button class="btn-ghost">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+          打印
+        </button>
+      </div>
+    </div>
+
+    <!-- Risk Items -->
+    <div class="risk-section-title">风险项详情</div>
+
+    <!-- Risk Item 1: HIGH -->
+    <div class="risk-card risk-high">
+      <div class="risk-card-header">
+        <div class="risk-icon icon-high">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><line x1="7" y1="3" x2="7" y2="8"/><circle cx="7" cy="11" r="0.8" fill="currentColor"/></svg>
+        </div>
+        <div class="risk-title">高风险 #1 - 条款合法性</div>
+        <span class="risk-badge badge-high">高风险</span>
+        <select class="status-select">
+          <option>待处理</option>
+          <option>处理中</option>
+          <option>已处理</option>
+          <option>已忽略</option>
+        </select>
+      </div>
+      <div class="risk-card-body">
+        <div class="risk-field">
+          <div class="risk-field-label">条款原文</div>
+          <div class="blockquote-box">
+            第八条 甲方有权在合同履行期间单方面变更合同条款，包括但不限于价格、交付期限、质量标准等核心内容，乙方应当无条件接受。
+          </div>
+        </div>
+        <div class="risk-field">
+          <div class="risk-field-label">违反法规</div>
+          <div class="risk-field-content">
+            <span class="law-ref">《中华人民共和国民法典》第四百九十七条</span> - 格式条款具有本法第一编第六章第三节和本法第五百零六条规定的无效情形，或者提供格式条款一方不合理地免除或者减轻其责任、加重对方责任、限制对方主要权利，该格式条款无效。
+          </div>
+        </div>
+        <div class="risk-field">
+          <div class="risk-field-label">修改建议</div>
+          <div class="risk-field-content">
+            建议修改为"合同条款的变更须经双方协商一致，并以书面形式确认"。单方面变更权违反公平原则，可能导致该条款被认定为无效格式条款。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Risk Item 2: MEDIUM -->
+    <div class="risk-card risk-medium">
+      <div class="risk-card-header">
+        <div class="risk-icon icon-medium">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><line x1="7" y1="3" x2="7" y2="8"/><circle cx="7" cy="11" r="0.8" fill="currentColor"/></svg>
+        </div>
+        <div class="risk-title">中风险 #2 - 违约责任不对等</div>
+        <span class="risk-badge badge-medium">中风险</span>
+        <select class="status-select">
+          <option>待处理</option>
+          <option>处理中</option>
+          <option>已处理</option>
+          <option>已忽略</option>
+        </select>
+      </div>
+      <div class="risk-card-body">
+        <div class="risk-field">
+          <div class="risk-field-label">条款原文</div>
+          <div class="blockquote-box">
+            第十二条 乙方逾期交付的，每日应按合同总金额的5%支付违约金；甲方逾期付款的，不承担违约责任。
+          </div>
+        </div>
+        <div class="risk-field">
+          <div class="risk-field-label">违反法规</div>
+          <div class="risk-field-content">
+            <span class="law-ref">《中华人民共和国民法典》第五百八十五条</span> - 当事人可以约定一方违约时应当根据违约情况向对方支付一定数额的违约金。约定的违约金过分高于造成的损失的，人民法院或者仲裁机构可以根据当事人的请求予以适当减少。
+          </div>
+        </div>
+        <div class="risk-field">
+          <div class="risk-field-label">修改建议</div>
+          <div class="risk-field-content">
+            建议将违约金比例调整为每日0.05%-0.1%的合理范围，并增加甲方逾期付款的对称违约责任条款，确保双方权利义务对等。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Risk Item 3: LOW -->
+    <div class="risk-card risk-low">
+      <div class="risk-card-header">
+        <div class="risk-icon icon-low">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><line x1="7" y1="3" x2="7" y2="8"/><circle cx="7" cy="11" r="0.8" fill="currentColor"/></svg>
+        </div>
+        <div class="risk-title">低风险 #3 - 争议解决条款</div>
+        <span class="risk-badge badge-low">低风险</span>
+        <select class="status-select">
+          <option>待处理</option>
+          <option>处理中</option>
+          <option>已处理</option>
+          <option>已忽略</option>
+        </select>
+      </div>
+      <div class="risk-card-body">
+        <div class="risk-field">
+          <div class="risk-field-label">条款原文</div>
+          <div class="blockquote-box">
+            第二十条 因本合同引起的争议，双方应协商解决；协商不成的，由甲方所在地人民法院管辖。
+          </div>
+        </div>
+        <div class="risk-field">
+          <div class="risk-field-label">违反法规</div>
+          <div class="risk-field-content">
+            <span class="law-ref">《中华人民共和国民事诉讼法》第三十五条</span> - 合同或者其他财产权益纠纷的当事人可以书面协议选择被告住所地、合同履行地、合同签订地、原告住所地、标的物所在地等与争议有实际联系的地点的人民法院管辖。
+          </div>
+        </div>
+        <div class="risk-field">
+          <div class="risk-field-label">修改建议</div>
+          <div class="risk-field-content">
+            单方约定管辖法院虽不必然违法，但建议改为双方协商确定管辖法院，或选择合同履行地/签订地法院管辖，以降低被认定为格式条款的风险。
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>
