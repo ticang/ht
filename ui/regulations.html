@@ -157,6 +157,7 @@ body {
   gap: 16px;
 }
 .topbar-right .icon-btn {
+  position: relative;
   width: 36px; height: 36px;
   border-radius: 50%;
   border: none;
@@ -169,6 +170,16 @@ body {
 }
 .topbar-right .icon-btn:hover { background: var(--blue-light); }
 .topbar-right .icon-btn svg { width: 18px; height: 18px; color: var(--text-secondary); }
+.topbar-right .badge-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  background: var(--red);
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+}
 
 /* ===== Content ===== */
 .content {
@@ -477,6 +488,7 @@ body {
     <div class="topbar-right">
       <button class="icon-btn" title="通知">
         <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 7.5a4.5 4.5 0 00-9 0c0 5-2.25 6.5-2.25 6.5h13.5S13.5 12.5 13.5 7.5z"/><path d="M10.3 15.5a1.5 1.5 0 01-2.6 0"/></svg>
+        <span class="badge-dot"></span>
       </button>
       <button class="icon-btn" title="帮助">
         <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="7"/><path d="M7 7a2 2 0 013.5 1.5c0 1.5-2 1.5-2 3"/><circle cx="9" cy="13.5" r="0.5" fill="currentColor"/></svg>
