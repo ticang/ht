@@ -154,6 +154,35 @@ body {
 .topbar-breadcrumb a:hover { color: var(--blue-primary); }
 .topbar-breadcrumb .sep { color: var(--border); }
 .topbar-breadcrumb .current { color: var(--text-primary); font-weight: 500; }
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.topbar-right .icon-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--blue-light);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  position: relative;
+}
+.topbar-right .icon-btn:hover { background: var(--blue-lighter); }
+.topbar-right .icon-btn svg { width: 18px; height: 18px; color: var(--text-secondary); }
+.topbar-right .badge-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  background: var(--red);
+  border-radius: 50%;
+  border: 1.5px solid var(--surface);
+}
 .btn-back {
   display: inline-flex;
   align-items: center;
@@ -464,10 +493,16 @@ body {
       <span class="sep">/</span>
       <span class="current">报告详情</span>
     </div>
-    <a class="btn-back" href="compliance.html">
-      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2L4 7l5 5"/></svg>
-      返回
-    </a>
+    <div class="topbar-right">
+      <button class="icon-btn" title="通知">
+        <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 7.5a4.5 4.5 0 00-9 0c0 5-2.25 6.5-2.25 6.5h13.5S13.5 12.5 13.5 7.5z"/><path d="M10.3 15.5a1.5 1.5 0 01-2.6 0"/></svg>
+        <span class="badge-dot"></span>
+      </button>
+      <a class="btn-back" href="compliance.html">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2L4 7l5 5"/></svg>
+        返回
+      </a>
+    </div>
   </header>
 
   <!-- Content -->
