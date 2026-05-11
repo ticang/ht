@@ -55,7 +55,7 @@
   - 动作：校准模型配置、用户管理、API Key、审计日志四个标签页；通知入口保持统一视觉与未读状态。
   - 验证：设置页标签切换可用；顶部通知入口在主要页面保持一致。
 
-- [ ] **步骤 8：浏览器验收**
+- [x] **步骤 8：浏览器验收**
   - 文件：`ui/*.html`
   - 动作：逐页打开静态 HTML，检查桌面宽度下布局、文字、按钮、链接和滚动。
   - 验证：至少覆盖 `login.html`、`dashboard.html`、`contracts.html`、`contract-detail.html`、`contract-diff.html`、`compliance.html`、`compliance-report.html`、`regulations.html`、`settings.html`。
@@ -80,5 +80,12 @@
 - 已完成：Task 5 将合规校验页单份/批量校验和最近报告“查看”统一链接到合规报告页，并将报告页“导出PDF”保持为静态自链接。
 - 已完成：Task 6 保留法规知识库搜索、同步、上传入口，并将表格行“查看/引用”改为静态自链接。
 - 已完成：Task 7 验证设置页四个标签和标签切换逻辑，并为合规报告页补齐顶部通知入口与未读点。
-- 未实施：Task 8 及后续浏览器验收尚未执行。
+- 已完成：Task 8 已完成静态链接扫描、占位标记扫描，并通过 Edge + Playwright 逐页浏览器验收。
 - 风险：如果用户期望的是 Next.js 正式工程，而不是静态 HTML 原型完善，需要重写计划范围。
+
+### 实施 Review
+
+- 已完成：UI 静态原型已按设计文档核心页面和流程入口对齐。
+- 验证命令：检查 `href="#"`、临时标记和占位文案是否仍存在于核心流程中。
+- 浏览器验证：已用 Edge + Playwright 逐页打开 9 个 `ui/*.html`，检查标题、主导航、横向溢出、控制台错误，并验证 `contract-detail.html` 与 `settings.html` 标签切换。
+- 未实现：真实 API、文件上传、PDF 导出、WebSocket 通知、Next.js 工程化迁移。
