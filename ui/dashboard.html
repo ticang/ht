@@ -1085,5 +1085,48 @@ body {
 
 </div>
 
+<script>
+(function() {
+  var chatInner = document.querySelector('.chat-inner');
+  var chatArea = document.querySelector('.chat-area');
+  var input = document.querySelector('.input-field');
+  var sendButton = document.querySelector('.send-btn');
+
+  function appendUserMessage(text) {
+    var row = document.createElement('div');
+    row.className = 'msg-row user';
+    row.innerHTML = '<div class="msg-avatar user-av">我</div><div class="msg-bubble user-bubble"></div>';
+    row.querySelector('.msg-bubble').textContent = text;
+    chatInner.appendChild(row);
+  }
+
+  function appendAgentAck() {
+    var row = document.createElement('div');
+    row.className = 'msg-row';
+    row.innerHTML = '<div class="msg-avatar agent-av"><svg width="18" height="18" viewBox="0 0 28 28" fill="none"><path d="M14 2L4 7V14C4 20 9.4 24.8 14 26C18.6 24.8 24 20 24 14V7L14 2Z" stroke="#1E55A8" stroke-width="2" stroke-linejoin="round"/></svg></div><div class="msg-bubble agent-bubble"></div>';
+    row.querySelector('.msg-bubble').textContent = '已收到您的问题，我会结合合同内容和法规库继续分析。';
+    chatInner.appendChild(row);
+  }
+
+  function sendMessage() {
+    var text = input.value.trim();
+    if (!text) return;
+    appendUserMessage(text);
+    appendAgentAck();
+    input.value = '';
+    chatArea.scrollTop = chatArea.scrollHeight;
+    input.focus();
+  }
+
+  sendButton.addEventListener('click', sendMessage);
+  input.addEventListener('keydown', function(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      sendMessage();
+    }
+  });
+})();
+</script>
+
 </body>
 </html>

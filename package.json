@@ -1,0 +1,12 @@
+{
+  "name": "contract-agent-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e": "node --test tests/e2e/ui-interactions.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.57.0"
+  }
+}

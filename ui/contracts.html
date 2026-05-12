@@ -633,12 +633,47 @@ tbody tr:last-child td { border-bottom: none; }
 <script>
 (function() {
   var pills = document.querySelectorAll('.pill');
+  var searchInput = document.querySelector('.filter-row input[type="text"]');
+  var typeSelect = document.querySelector('.filter-row select');
+  var rows = Array.prototype.slice.call(document.querySelectorAll('tbody tr'));
+
+  function selectedStatus() {
+    var active = document.querySelector('.pill.active');
+    if (!active) return '全部';
+    return active.childNodes[0].textContent.trim();
+  }
+
+  function applyFilters() {
+    var query = (searchInput && searchInput.value || '').trim().toLowerCase();
+    var status = selectedStatus();
+    var type = typeSelect && typeSelect.value !== '全部类型' ? typeSelect.value : '';
+
+    rows.forEach(function(row) {
+      var cells = row.querySelectorAll('td');
+      var rowText = row.innerText.toLowerCase();
+      var rowType = cells[3] ? cells[3].innerText.trim() : '';
+      var rowStatus = row.querySelector('.status-badge') ? row.querySelector('.status-badge').innerText.trim() : '';
+      var matchesQuery = !query || rowText.indexOf(query) !== -1;
+      var matchesStatus = status === '全部' || rowStatus === status;
+      var matchesType = !type || rowType === type;
+      row.style.display = matchesQuery && matchesStatus && matchesType ? '' : 'none';
+    });
+  }
+
   pills.forEach(function(pill) {
     pill.addEventListener('click', function() {
       pills.forEach(function(p) { p.classList.remove('active'); });
       this.classList.add('active');
+      applyFilters();
     });
   });
+
+  if (searchInput) {
+    searchInput.addEventListener('input', applyFilters);
+  }
+  if (typeSelect) {
+    typeSelect.addEventListener('change', applyFilters);
+  }
 })();
 </script>
 

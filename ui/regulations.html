@@ -676,5 +676,53 @@ body {
   </div>
 </div>
 
+<script>
+(function() {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.filter-tab'));
+  var searchInput = document.querySelector('.search-input-wrap input');
+  var modeButtons = Array.prototype.slice.call(document.querySelectorAll('.segmented-btn'));
+  var rows = Array.prototype.slice.call(document.querySelectorAll('tbody tr'));
+
+  function activeCategory() {
+    var active = document.querySelector('.filter-tab.active');
+    if (!active) return '全部';
+    return active.childNodes[0].textContent.trim();
+  }
+
+  function applyFilters() {
+    var category = activeCategory();
+    var query = (searchInput && searchInput.value || '').trim().toLowerCase();
+
+    rows.forEach(function(row) {
+      var typeTag = row.querySelector('.type-tag');
+      var rowType = typeTag ? typeTag.innerText.trim() : '';
+      var rowText = row.innerText.toLowerCase();
+      var matchesCategory = category === '全部' || rowType === category;
+      var matchesQuery = !query || rowText.indexOf(query) !== -1;
+      row.style.display = matchesCategory && matchesQuery ? '' : 'none';
+    });
+  }
+
+  tabs.forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      tabs.forEach(function(item) { item.classList.remove('active'); });
+      tab.classList.add('active');
+      applyFilters();
+    });
+  });
+
+  modeButtons.forEach(function(button) {
+    button.addEventListener('click', function() {
+      modeButtons.forEach(function(item) { item.classList.remove('active'); });
+      button.classList.add('active');
+    });
+  });
+
+  if (searchInput) {
+    searchInput.addEventListener('input', applyFilters);
+  }
+})();
+</script>
+
 </body>
 </html>
