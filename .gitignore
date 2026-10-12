@@ -21,3 +21,4 @@ sample_*.md
 
 # 工具
 .mimosa/
+.idea/
