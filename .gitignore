@@ -6,8 +6,8 @@
 __pycache__/
 *.pyc
 
-# 模型（TEI 的 ONNX 权重，~1GB，见 README 的下载步骤）
-models/
+# 模型（TEI 的 ONNX 权重经 Git LFS 入库；下载慢可按 README 步骤自行下载）
+# models/
 
 # 运行时产物
 uploads/
