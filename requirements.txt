@@ -1,0 +1,23 @@
+langchain>=0.2,<0.4
+python-docx>=1.1.0
+elasticsearch>=8.14,<9
+requests>=2.31
+python-dotenv>=1.0
+
+# v2：多类型解析（对应 aichain/document_loader 的各 loader 依赖）
+pymupdf>=1.24        # pdf：文本检测 + 样例 PDF 生成（生产 fitz 同款）
+pdf2docx>=0.5.8      # pdf→docx（MinerU 失败时的降级路径，生产 UnstructuredPaddlePDFLoader 同款）
+mineru[core]>=4.0    # pdf 主解析：MinerU 4.x（core=ONNX+llama.cpp 后端，无需 torch；
+                     #   依赖 onnxruntime/mineru-llama-cpp/modelscope 自动安装；
+                     #   首次运行自动下模型到本地缓存；需 vlm 后端时改 mineru[torch]）
+openpyxl>=3.1        # excel：合并单元格展开 + 行转陈述句（生产 excel_loader 同款）
+pandas>=2.0          # FAQ 表格化（生产 handle_faq_dox 返回 DataFrame 同款）
+
+# v3：HTTP 服务、langfuse 观测、ragas 评估
+fastapi>=0.110
+uvicorn>=0.29
+sse-starlette>=2.0
+python-multipart>=0.0.9    # 上传接口 multipart 解析
+langfuse>=2.57,<3          # 观测 SDK（配自托管 langfuse v2 server）
+ragas==0.2.15              # RAG 评估（0.4.x 与 langchain 0.3 全家不兼容）
+langchain-openai<0.4       # ragas judge LLM 接微信 OpenAI 兼容接口

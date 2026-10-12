@@ -1,0 +1,135 @@
+# rag-lab 全部基础设施（一个 compose 管全部）：
+#   tei-embedding / tei-reranker : 向量嵌入 + 重排（bge-m3 / bge-reranker int8 ONNX）
+#   es8 / kibana8                : ES 8.15（IK 插件，384m 堆）+ Kibana
+#   langfuse / langfuse-db       : 观测平台 v2 + postgres（seed 了 API key）
+#
+# 启动：docker compose up -d
+# 模型与数据都在本地卷/目录，重启不重下：
+#   ./models        TEI 的 ONNX 模型（宿主机下载后挂载，见 README/历史文档）
+#   es_data 卷      ES 数据（⚠ 本 compose 的卷名是 rag-lab_es_data；历史上在
+#                   es8-kibana/ 子目录跑时建的是 es8-kibana_es_data，换卷后
+#                   首次启动索引为空——api_server 启动会自动重新入库样例）
+#   langfuse_db_data 卷：langfuse 数据（与原 docker-compose.langfuse.yml 同
+#                   project 名 rag-lab，卷名不变，历史 trace 保留）
+services:
+  # ---------- 向量/重排（TEI）----------
+  tei-embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    container_name: tei-embedding
+    command:
+      - "--model-id"
+      - "/data/models/bge-m3-onnx"
+      - "--auto-truncate"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--max-concurrent-requests"
+      - "8"
+    ports:
+      - "8081:80"
+    volumes:
+      - ./models:/data/models
+    restart: unless-stopped
+
+  tei-reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    container_name: tei-reranker
+    command:
+      - "--model-id"
+      - "/data/models/bge-reranker-v2-m3-onnx"
+      - "--auto-truncate"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--max-concurrent-requests"
+      - "8"
+    ports:
+      - "8082:80"
+    volumes:
+      - ./models:/data/models
+    restart: unless-stopped
+
+  # ---------- ES + Kibana（IK 插件镜像在 es8-kibana/ 下构建）----------
+  elasticsearch:
+    build:
+      context: ./es8-kibana
+      dockerfile: Dockerfile
+    image: es8-ik:8.15.0
+    container_name: es8
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms384m -Xmx384m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    container_name: kibana8
+    environment:
+      - ELASTICSEARCH_HOSTS=http://es8:9200
+      - I18N_LOCALE=zh-CN
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------- langfuse（观测）----------
+  langfuse-db:
+    image: postgres:16-alpine
+    container_name: langfuse-db
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: langfuse
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: raglab-nextauth-secret-0123456789abcdef
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: raglab-salt-0123456789abcdef
+      # seed org/project/user 与 API key（与 .env 的 LANGFUSE_* 对应）
+      LANGFUSE_INIT_ORG_ID: rag-lab
+      LANGFUSE_INIT_ORG_NAME: rag-lab
+      LANGFUSE_INIT_PROJECT_ID: rag-lab
+      LANGFUSE_INIT_PROJECT_NAME: rag-lab
+      LANGFUSE_INIT_USER_EMAIL: admin@rag-lab.local
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: raglab123
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-raglab000000000000000000000000000
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-raglab000000000000000000000000000
+      TELEMETRY_ENABLED: "false"
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  es_data:
+  langfuse_db_data:

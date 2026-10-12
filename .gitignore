@@ -1,0 +1,23 @@
+# 环境与密钥（用 .env.example 做模板）
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 模型（TEI 的 ONNX 权重，~1GB，见 README 的下载步骤）
+models/
+
+# 运行时产物
+uploads/
+*.log
+
+# 样例文件与转换中间产物（make_sample_files 运行时生成）
+sample_*.docx
+sample_*.pdf
+sample_*.xlsx
+sample_*.md
+
+# 工具
+.mimosa/
