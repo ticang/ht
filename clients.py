@@ -13,6 +13,7 @@ LLM 则对应生产的 get_llm_with_db()，此处为微信 OpenAI 兼容接口�
 手写 requests 客户端而非引入 langchain-openai/sentence-transformers：
 与真实项目 std_client.py 手写 HTTP 客户端的风格一致，依赖最少。
 """
+import os
 import re
 import time
 from typing import List
@@ -59,26 +60,115 @@ class TEIEmbedClient:
       ① 入库时 embed_documents 批量算向量（对应 ES add_texts 的嵌入步骤）
       ② 检索时 embed_query 算查询向量（对应 hybrid_search 向量路）
       ③ 嵌入去重器 SimpleRedundantFilter 也复用它做两两余弦
+
+    TEI 批量上限（超限返回 413 Payload Too Large）：
+      · max_batch_tokens——整批 token 总数上限。本部署 docker compose
+        显式设为 2048（远小于 TEI 官方默认 16384），400 字的子块五六个
+        就能击穿，整文件一次性 POST 必 413
+      · max_client_batch_size——整批条数上限（32）
+    客户端按「条数 × 估算 token」双约束自动切批后逐批 POST，并对 413
+    做减半自适应重试——与 TEI 实际启动参数解耦，换部署不用改代码。
     """
+
+    # 内置保守默认（对应本部署 TEI 参数；/info 探测失败时兜底）。
+    # 取小值只会多批几次、不会 413；TEI 官方默认是 16384/32。
+    DEFAULT_MAX_BATCH_TOKENS = 2048
+    DEFAULT_MAX_CLIENT_BATCH_SIZE = 32
 
     def __init__(self, base_url: str, timeout: int = 60):
         self.base_url = check_url(base_url.rstrip("/"))   # 初始化即校验白名单
         self.timeout = timeout
+        # 上限取值优先级：env 显式配置 > TEI /info 实测 > 内置保守默认
+        self.max_batch_tokens = int(os.getenv("TEI_MAX_BATCH_TOKENS", 0)) or None
+        self.max_client_batch_size = int(os.getenv("TEI_MAX_CLIENT_BATCH_SIZE", 0)) or None
+        self._probe_limits()
+        self.max_batch_tokens = self.max_batch_tokens or self.DEFAULT_MAX_BATCH_TOKENS
+        self.max_client_batch_size = \
+            self.max_client_batch_size or self.DEFAULT_MAX_CLIENT_BATCH_SIZE
+        print(f"[TEI:embed] 批量上限：max_batch_tokens={self.max_batch_tokens}，"
+              f"max_client_batch_size={self.max_client_batch_size}", flush=True)
+
+    def _probe_limits(self):
+        """GET /info 读服务端真实批量上限（TEI ≥1.2 暴露这两个字段）。
+        各部署 TEI 启动参数不同（--max-batch-tokens/--max-client-batch-size），
+        按服务端实际上限切批最稳；探测失败（服务未起/老版本无字段）静默
+        退回 env 或内置默认，不影响主流程。"""
+        try:
+            resp = _SESSION.get(check_url(f"{self.base_url}/info"), timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if self.max_batch_tokens is None:
+                    self.max_batch_tokens = int(data.get("max_batch_tokens") or 0) or None
+                if self.max_client_batch_size is None:
+                    self.max_client_batch_size = \
+                        int(data.get("max_client_batch_size") or 0) or None
+        except Exception:
+            pass
+
+    @staticmethod
+    def _est_tokens(text: str) -> int:
+        """无本地 tokenizer 时的保守 token 估算：bge-m3 的 sentencepiece
+        对中文≈1字1token、英文≈0.75token/字符，直接取字符数即不低估
+        （估大只会让批次更小，是安全方向）。"""
+        return max(1, len(text))
+
+    def _batch(self, texts: List[str]):
+        """按「条数上限 × 估算 token 上限」双约束把文本列表切批（生成器）。
+        单条就超 token 上限时自成一批，交给 _embed_batch 报清晰错误。"""
+        cap_tokens = max(256, int(self.max_batch_tokens * 0.9))   # 留10%估算余量
+        cap_count = max(1, self.max_client_batch_size)
+        batch: List[str] = []
+        used = 0
+        for t in texts:
+            est = self._est_tokens(t)
+            if batch and (used + est > cap_tokens or len(batch) >= cap_count):
+                yield batch
+                batch, used = [], 0
+            batch.append(t)
+            used += est
+        if batch:
+            yield batch
+
+    def _embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """单批 POST；413（批量超限）时减半重试——/info 探测缺失或估算
+        偏差（生僻字/多语言混合）导致单批超限的自愈兜底；单条仍超限则
+        抛出带处理建议的明确错误（而非裸 413）。"""
+        resp = _post_with_retry(f"{self.base_url}/embed",
+                                json={"inputs": texts}, timeout=self.timeout)
+        if resp.status_code == 413:
+            if len(texts) > 1:
+                mid = len(texts) // 2
+                print(f"[TEI:embed] 413 批量超限，减半重试（{len(texts)}→"
+                      f"{mid}+{len(texts) - mid}）", flush=True)
+                return (self._embed_batch(texts[:mid])
+                        + self._embed_batch(texts[mid:]))
+            raise RuntimeError(
+                f"单条文本（{len(texts[0])} 字，估算 {self._est_tokens(texts[0])} "
+                f"tokens）超过 TEI 批量上限 {self.max_batch_tokens}：请调大 TEI "
+                f"--max-batch-tokens 或减小切分尺寸（OPSGPT_PARENT_CHUNK_SIZE）")
+        resp.raise_for_status()
+        return resp.json()
 
     def embed(self, texts: List[str]) -> List[List[float]]:
-        """批量嵌入。TEI 返回与输入等长的向量列表（bge-m3 → 1024维）。
+        """批量嵌入（内部自动切批，返回与输入等长同序的向量列表）。
+        TEI 返回与输入等长的向量列表（bge-m3 → 1024维）。
         空列表直接返回（TEI 对空批会 413）。"""
         if not texts:
             return []
         t0 = time.perf_counter()
-        longest = max((len(t) for t in texts), default=0)
-        print(f"[TEI:embed] → {len(texts)} 条文本（最长 {longest} 字）", flush=True)
-        resp = _post_with_retry(f"{self.base_url}/embed",
-                                json={"inputs": texts}, timeout=self.timeout)
-        resp.raise_for_status()
-        vectors = resp.json()
+        longest = max(len(t) for t in texts)
+        total_chars = sum(len(t) for t in texts)
+        batches = list(self._batch(texts))
+        vectors: List[List[float]] = []
+        for i, batch in enumerate(batches, 1):
+            est = sum(self._est_tokens(t) for t in batch)
+            print(f"[TEI:embed] → 批次 {i}/{len(batches)}：{len(batch)} 条"
+                  f"（估算 {est} tokens，上限 {self.max_batch_tokens}）", flush=True)
+            vectors.extend(self._embed_batch(batch))
         dt = time.perf_counter() - t0
-        print(f"[TEI:embed] ← {len(vectors)}×{len(vectors[0])} 维，耗时 {dt:.2f}s", flush=True)
+        print(f"[TEI:embed] ← 共 {len(vectors)}×{len(vectors[0])} 维"
+              f"（{total_chars} 字，最长 {longest} 字，{len(batches)} 批），"
+              f"耗时 {dt:.2f}s", flush=True)
         return vectors
 
     def embed_query(self, text: str) -> List[float]:
