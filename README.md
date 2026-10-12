@@ -3,7 +3,7 @@
 ## 启动项目（从零开始）
 
 ### 0. 前置
-
+git lfs install
 - Docker Desktop 已运行
 - Python ≥ 3.10（demo 用 3.13 验证）
 
