@@ -1,0 +1,6 @@
+{"user_input": "PDCP丢弃定时器的默认值是多少？", "reference": "PDCP丢弃定时器（discardTimer）默认值为500毫秒，取值范围50到3000毫秒。", "source_type": "word", "expected_titles": ["sample_kb"]}
+{"user_input": "A5事件的门限默认值是多少？", "reference": "A5事件门限：门限1默认为-100dBm，门限2默认为-105dBm。", "source_type": "md", "expected_titles": ["sample_switch"]}
+{"user_input": "传输时延阈值超过多少会告警？", "reference": "传输时延阈值默认值为50毫秒，实际时延连续5个周期超过该阈值时触发传输劣化告警。", "source_type": "pdf", "expected_titles": ["sample_transport"]}
+{"user_input": "状态报告周期的取值范围是多少？", "reference": "状态报告周期取值范围为100~1000毫秒，默认值200毫秒。", "source_type": "excel", "expected_titles": ["sample_params", "sample_kb"]}
+{"user_input": "如何重置设备的管理员密码？", "reference": "登录设备Web页面，进入系统工具→配置文件，先备份配置再选择恢复出厂设置；或使用CLI命令 reset admin-password 进行重置。", "source_type": "faq_docx", "expected_titles": ["如何重置设备的管理员密码？"]}
+{"user_input": "如何备份设备配置？", "reference": "登录设备Web页面，进入系统工具→配置文件，点击导出配置并设置加密口令。", "source_type": "faq_excel", "expected_titles": ["如何备份设备配置？"]}

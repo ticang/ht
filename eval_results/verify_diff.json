@@ -1,0 +1,167 @@
+{
+  "run_name": "verify_diff",
+  "created_at": "2026-10-13 12:24:50",
+  "config": {
+    "kb": "kb-demo",
+    "max_recalls": 4,
+    "min_score": 0.5,
+    "top_k": 4,
+    "llm": "Deepseek-v4-flash",
+    "embedder": "bge-m3",
+    "reranker": "bge-reranker-v2-m3"
+  },
+  "overall": {
+    "context_precision": 0.8333,
+    "context_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.9133,
+    "answer_correctness": 0.8803
+  },
+  "hard": {
+    "hit_rate": 1.0,
+    "mrr": 1.0,
+    "avg_latency_s": 7.318
+  },
+  "by_type": {
+    "excel": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.9731,
+      "answer_correctness": 0.7365,
+      "hit_rate": 1.0
+    },
+    "faq_docx": {
+      "context_precision": 0.5,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.9296,
+      "answer_correctness": 0.9318,
+      "hit_rate": 1.0
+    },
+    "faq_excel": {
+      "context_precision": 0.5,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.7614,
+      "answer_correctness": 0.9085,
+      "hit_rate": 1.0
+    },
+    "md": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "answer_correctness": 0.9908,
+      "hit_rate": 1.0
+    },
+    "pdf": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.816,
+      "answer_correctness": 0.9943,
+      "hit_rate": 1.0
+    },
+    "word": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "answer_correctness": 0.7199,
+      "hit_rate": 1.0
+    }
+  },
+  "samples": [
+    {
+      "user_input": "PDCP丢弃定时器的默认值是多少？",
+      "source_type": "word",
+      "pass": true,
+      "hit": 1,
+      "rr": 1.0,
+      "latency_s": 5.081,
+      "scores": {
+        "context_precision": 0.99999999995,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.9999999999999996,
+        "answer_correctness": 0.7199243830013907
+      }
+    },
+    {
+      "user_input": "A5事件的门限默认值是多少？",
+      "source_type": "md",
+      "pass": true,
+      "hit": 1,
+      "rr": 1.0,
+      "latency_s": 4.856,
+      "scores": {
+        "context_precision": 0.9999999999,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.9999999999999996,
+        "answer_correctness": 0.9907548016286098
+      }
+    },
+    {
+      "user_input": "传输时延阈值超过多少会告警？",
+      "source_type": "pdf",
+      "pass": true,
+      "hit": 1,
+      "rr": 1.0,
+      "latency_s": 4.45,
+      "scores": {
+        "context_precision": 0.9999999999,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.8160112264548566,
+        "answer_correctness": 0.9942836262174636
+      }
+    },
+    {
+      "user_input": "状态报告周期的取值范围是多少？",
+      "source_type": "excel",
+      "pass": true,
+      "hit": 1,
+      "rr": 1.0,
+      "latency_s": 4.678,
+      "scores": {
+        "context_precision": 0.9999999999,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.973059537627616,
+        "answer_correctness": 0.7365499525911576
+      }
+    },
+    {
+      "user_input": "如何重置设备的管理员密码？",
+      "source_type": "faq_docx",
+      "pass": true,
+      "hit": 1,
+      "rr": 1.0,
+      "latency_s": 1.607,
+      "scores": {
+        "context_precision": 0.49999999995,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.9296253339480343,
+        "answer_correctness": 0.9318181818181818
+      }
+    },
+    {
+      "user_input": "如何备份设备配置？",
+      "source_type": "faq_excel",
+      "pass": true,
+      "hit": 1,
+      "rr": 1.0,
+      "latency_s": 23.236,
+      "scores": {
+        "context_precision": 0.49999999995,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.7614009044262383,
+        "answer_correctness": 0.9085172367307608
+      }
+    }
+  ]
+}
