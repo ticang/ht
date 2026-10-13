@@ -35,6 +35,7 @@ demo 与生产的差异：
 """
 import hashlib
 import os
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -43,6 +44,7 @@ from langchain_core.documents import Document
 
 from file_service import get_upload_file_path
 from loaders import get_file_loader, handle_faq_docx
+from obs import obs
 from text_splitters import get_text_split
 
 # 生产 generate_faq_data(ingest.py:643-648)：50 行一批（数据库批量提交粒度，
@@ -82,7 +84,7 @@ class IngestService:
           · chain：生产按链名走不同 ingest chain（knowledge_base/knowledge_faq/
             graph...），demo 只认 'knowledge_base'，'knowledge_faq' 请走
             faq_batch_ingest（生产 FAQ 也是独立入口 :558）"""
-        start_time = __import__('time').time()
+        start_time = time.time()
         # 生产 :102：get_upload_file_path 把（可能的）minio 对象路径统一成本地
         # 文件；demo 固定本地存储模式（file_service.py 复刻该分支判定）
         file_path = get_upload_file_path(file_path)
@@ -103,18 +105,27 @@ class IngestService:
         # 生产 :117-128：ingest_chain.ingest_from_file → file_to_vector
         #   ① 切分器（get_text_split 默认父子切分）
         text_splitter = get_text_split(text_split)
-        #   ② 类型分派（get_file_loader：pdf/docx/md/xlsx 各归其 loader）
+        #   ② 类型分派（get_file_loader：pdf/docx/md/xlsx 各归其 loader，
+        #      分派动作本身在 loaders 层已埋 dispatch_loader）
         loader, split = get_file_loader(file_path, partition_type or "default",
                                         knowledge_id=item_id, split_type=split_type)
         #   ③ langchain 标准用法 load_and_split（生产 _load_file :184-187：
         #      split=True → load_and_split(text_splitter)；否则只 load）
-        docs = loader.load_and_split(text_splitter=text_splitter) if split else loader.load()
+        with obs.span("loader_load_and_split",
+                      input={"file": os.path.basename(file_path), "split": split}) as s:
+            docs = loader.load_and_split(text_splitter=text_splitter) if split else loader.load()
+            if s:
+                s.update(output={"blocks": len(docs)})
         print(f"[file_ingest] {os.path.basename(file_path)} 解析+切分 → {len(docs)} 块"
-              f"（{__import__('time').time() - start_time:.2f}s）", flush=True)
-        #   ④ doc_persistent（生产 :135-148：metadata 逐块合并后 from_documents）
+              f"（{time.time() - start_time:.2f}s）", flush=True)
+        #   ④ doc_persistent（生产 :135-148：metadata 逐块合并后 from_documents；
+        #      ES 嵌入/bulk 各阶段在 es_store 层埋点）
         for d in docs:
             d.metadata.update(metadata)
-        self.store.add_documents(docs)
+        with obs.span("es_persist", input={"docs": len(docs)}) as s:
+            self.store.add_documents(docs)
+            if s:
+                s.update(output={"persisted": len(docs)})
         return len(docs)
 
     # ------------------------------------------------------------------

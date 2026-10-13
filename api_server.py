@@ -163,99 +163,101 @@ async def assistant_stream(payload: AssistantRunPayload,
     t_start = time.time()
 
     # langfuse trace（生产以 transaction_id 兼作 langfuse_parent_id，
-    # assistant_run.py:19-20；demo 直接作 trace id）
+    # assistant_run.py:19-20；demo 直接作 trace id）。trace_scope 把它设为
+    # 当前 async 上下文的活跃 trace——后续分类/检索/重排/生成/嵌入等所有
+    # 链内埋点（obs.span / generation_call）自动挂到这条 trace 上
     trace = obs.trace(name="assistant_stream", input=question,
                       metadata={"assistant_uuid": payload.assistant_uuid},
                       id=parent_trace_id or transaction_id)
+    with obs.trace_scope(trace):
+        # ① 先产 run_id（生产 :2377；to_sse:164-170 把 str chunk 转 metadata 事件）
+        run_id = str(uuid.uuid4())
+        yield run_id
 
-    # ① 先产 run_id（生产 :2377；to_sse:164-170 把 str chunk 转 metadata 事件）
-    run_id = str(uuid.uuid4())
-    yield run_id
+        # ② 用户消息（生产 :2380-2395）
+        human_msg = HumanMessage(content=question, response_metadata=_meta(
+            transaction_id, thread_id, payload.assistant_uuid, "user"))
+        yield [human_msg]
 
-    # ② 用户消息（生产 :2380-2395）
-    human_msg = HumanMessage(content=question, response_metadata=_meta(
-        transaction_id, thread_id, payload.assistant_uuid, "user"))
-    yield [human_msg]
-
-    try:
-        # ③ 意图识别（生产 :1503-1506；埋点对照生产的分类 LLM 调用）
-        t0 = time.time()
-        classification = await classifier.classify_question(question)
-        qtype = classification.get("type")
-        obs.generation(trace, name="question_classification",
-                       input=question, output=qtype.value if qtype else "?",
-                       model="Deepseek-v4-flash",
-                       metadata={"耗时": round(time.time() - t0, 2),
-                                 "confidence": classification.get("classification_confidence")})
-
-        # ④ OTHER 类：分类器已让 LLM 直答（生产 :1511-1527）
-        if classification.get("llm_response"):
-            answer = classification["llm_response"]
-            route = "llm_response"
-        # ⑤ 预设回复（生产 :1530-1545）
-        elif classification.get("preset_response"):
-            answer = classifier.get_preset_content(classification["preset_response"]) \
-                     or "抱歉，我暂时无法回答这个问题。"      # 生产 :2360-2361 兜底话术
-            route = "preset_response"
-        else:
-            # ⑥ mcp 分支：demo 无 MCP 服务按降级语义走检索（生产 :1547-1568）
-            if qtype == QuestionType.MCP_QUERY:
-                print("  [分流] mcp 类：按生产降级语义转知识检索", flush=True)
-            # 知识检索（生产 :1609-1616 走 agent；demo 直连检索服务）
+        try:
+            # ③ 意图识别（生产 :1503-1506；埋点对照生产的分类 LLM 调用）
             t0 = time.time()
-            # langfuse：为本次 trace 创建 langchain callback handler——链内
-            # retriever/去重/重排各阶段自动逐级上报（生产同款机制，
-            # knowledge.py:84/:113-117 的 callbacks 通道）
-            handler = obs.langchain_handler(trace)
-            ret = await knowledges_retrieve(get_qa_chain, question,
-                                            [KB_ID], max_recalls=4, min_score=0.5,
-                                            callbacks=[handler] if handler else None)
-            docs = ret["source_documents"]
-            answer = ret["result"] or "没有匹配到相关知识，无法回答该问题。"
-            route = "knowledge_retrieve"
-            obs.generation(trace, name="knowledges_retrieve",
-                           input=question,
-                           output=[{"title": d.title, "score": d.score}
-                                   for d in docs],
-                           model="hybrid+rerank",
+            classification = await classifier.classify_question(question)
+            qtype = classification.get("type")
+            obs.generation(trace, name="question_classification",
+                           input=question, output=qtype.value if qtype else "?",
+                           model="Deepseek-v4-flash",
                            metadata={"耗时": round(time.time() - t0, 2),
-                                     "kb_empty": not docs})
-            # 引用消息：生产知识库 tool 的 ToolMessage（to_sse:186-193 靠
-            # response_metadata.kb_empty 统计知识命中）
-            tool_msg = ToolMessage(
-                content=json.dumps(
-                    [{"title": d.title, "score": d.score,
-                      "content": d.content[:100], "url": d.url} for d in docs],
-                    ensure_ascii=False),
-                name="knowledges_retrieve",
-                # langchain 0.3 的 ToolMessage 必填 tool_call_id（生产由 agent 的
-                # tool 调用自动生成；demo 用 run_id 关联本次回复）
-                tool_call_id=run_id,
-                response_metadata={"kb_empty": not docs,
-                                   **_meta(transaction_id, thread_id,
-                                           payload.assistant_uuid, "retriever")})
-            yield [tool_msg]
+                                     "confidence": classification.get("classification_confidence")})
 
-        # ⑦ 回答消息（生产为 token 级流；demo 按 ~40 字切片同 id 消息块模拟）
-        duration = round(time.time() - t_start, 2)
-        chunk_size, i = 40, 0
-        while i * chunk_size < len(answer):
-            piece = answer[i * chunk_size:(i + 1) * chunk_size]
-            ai_msg = AIMessage(content=piece, id=run_id, response_metadata=_meta(
-                transaction_id, thread_id, payload.assistant_uuid,
-                "Deepseek-v4-flash", duration))
-            yield [ai_msg]
-            await asyncio.sleep(0.05)              # 肉眼可见的"流式"节奏
-            i += 1
-        trace and trace.update(output=answer, metadata={"route": route, "type":
-                                qtype.value if qtype else "?"})
-    except Exception as ex:
-        # 生产 to_sse:204-215：错误不外泄细节
-        yield {"event": "error",
-               "data": json.dumps({"status_code": 500, "message": str(ex)[:200]},
-                                  ensure_ascii=False)}
-    finally:
-        obs.flush()
+            # ④ OTHER 类：分类器已让 LLM 直答（生产 :1511-1527）
+            if classification.get("llm_response"):
+                answer = classification["llm_response"]
+                route = "llm_response"
+            # ⑤ 预设回复（生产 :1530-1545）
+            elif classification.get("preset_response"):
+                answer = classifier.get_preset_content(classification["preset_response"]) \
+                         or "抱歉，我暂时无法回答这个问题。"  # 生产 :2360-2361 兜底话术
+                route = "preset_response"
+            else:
+                # ⑥ mcp 分支：demo 无 MCP 服务按降级语义走检索（生产 :1547-1568）
+                if qtype == QuestionType.MCP_QUERY:
+                    print("  [分流] mcp 类：按生产降级语义转知识检索", flush=True)
+                # 知识检索（生产 :1609-1616 走 agent；demo 直连检索服务）
+                t0 = time.time()
+                # langfuse：为本次 trace 创建 langchain callback handler——链内
+                # retriever/去重/重排各阶段自动逐级上报（生产同款机制，
+                # knowledge.py:84/:113-117 的 callbacks 通道）
+                handler = obs.langchain_handler(trace)
+                ret = await knowledges_retrieve(get_qa_chain, question,
+                                                [KB_ID], max_recalls=4, min_score=0.5,
+                                                callbacks=[handler] if handler else None)
+                docs = ret["source_documents"]
+                answer = ret["result"] or "没有匹配到相关知识，无法回答该问题。"
+                route = "knowledge_retrieve"
+                obs.generation(trace, name="knowledges_retrieve",
+                               input=question,
+                               output=[{"title": d.title, "score": d.score}
+                                       for d in docs],
+                               model="hybrid+rerank",
+                               metadata={"耗时": round(time.time() - t0, 2),
+                                         "kb_empty": not docs})
+                # 引用消息：生产知识库 tool 的 ToolMessage（to_sse:186-193 靠
+                # response_metadata.kb_empty 统计知识命中）
+                tool_msg = ToolMessage(
+                    content=json.dumps(
+                        [{"title": d.title, "score": d.score,
+                          "content": d.content[:100], "url": d.url} for d in docs],
+                        ensure_ascii=False),
+                    name="knowledges_retrieve",
+                    # langchain 0.3 的 ToolMessage 必填 tool_call_id（生产由 agent
+                    # 的 tool 调用自动生成；demo 用 run_id 关联本次回复）
+                    tool_call_id=run_id,
+                    response_metadata={"kb_empty": not docs,
+                                       **_meta(transaction_id, thread_id,
+                                               payload.assistant_uuid, "retriever")})
+                yield [tool_msg]
+
+            # ⑦ 回答消息（生产为 token 级流；demo 按 ~40 字切片同 id 消息块模拟）
+            duration = round(time.time() - t_start, 2)
+            chunk_size, i = 40, 0
+            while i * chunk_size < len(answer):
+                piece = answer[i * chunk_size:(i + 1) * chunk_size]
+                ai_msg = AIMessage(content=piece, id=run_id, response_metadata=_meta(
+                    transaction_id, thread_id, payload.assistant_uuid,
+                    "Deepseek-v4-flash", duration))
+                yield [ai_msg]
+                await asyncio.sleep(0.05)          # 肉眼可见的"流式"节奏
+                i += 1
+            trace and trace.update(output=answer, metadata={
+                "route": route, "type": qtype.value if qtype else "?"})
+        except Exception as ex:
+            # 生产 to_sse:204-215：错误不外泄细节
+            yield {"event": "error",
+                   "data": json.dumps({"status_code": 500, "message": str(ex)[:200]},
+                                      ensure_ascii=False)}
+        finally:
+            obs.flush()
 
 
 def to_sse(messages_stream):
@@ -332,26 +334,27 @@ async def upload_knowledge(
     t0 = time.time()
     trace = obs.trace(name="knowledge_upload", input={"file": safe_name, "chain": chain},
                       metadata={"knowledge_base_id": knowledge_base_id})
-    try:
-        ingest = IngestService(store)
-        if chain == "knowledge_faq":
-            n = ingest.faq_batch_ingest(dest, column_question=column_question,
-                                        column_answer=column_answer,
-                                        knowledge_base_id=knowledge_base_id)
-        else:
-            n = ingest.file_ingest(chain, dest, knowledge_base_id=knowledge_base_id)
-        obs.generation(trace, name="file_ingest", output={"chunks": n},
-                       model="loaders+splitter+ES",
-                       metadata={"耗时": round(time.time() - t0, 2)})
-        obs.flush()
-        return {"code": 200, "msg": "success",
-                "data": {"file": safe_name, "chain": chain, "chunks": n,
-                         "duration": round(time.time() - t0, 2)}}
-    except Exception as ex:
-        # 生产 file_ingest 失败同样如实回传 message（ingest.py:139-140）
-        obs.flush()
-        return {"code": 500, "msg": f"知识生成失败，error: {str(ex)[:200]}",
-                "data": {"file": safe_name}}
+    with obs.trace_scope(trace):
+        try:
+            ingest = IngestService(store)
+            if chain == "knowledge_faq":
+                n = ingest.faq_batch_ingest(dest, column_question=column_question,
+                                            column_answer=column_answer,
+                                            knowledge_base_id=knowledge_base_id)
+            else:
+                n = ingest.file_ingest(chain, dest, knowledge_base_id=knowledge_base_id)
+            obs.generation(trace, name="file_ingest", output={"chunks": n},
+                           model="loaders+splitter+ES",
+                           metadata={"耗时": round(time.time() - t0, 2)})
+            obs.flush()
+            return {"code": 200, "msg": "success",
+                    "data": {"file": safe_name, "chain": chain, "chunks": n,
+                             "duration": round(time.time() - t0, 2)}}
+        except Exception as ex:
+            # 生产 file_ingest 失败同样如实回传 message（ingest.py:139-140）
+            obs.flush()
+            return {"code": 500, "msg": f"知识生成失败，error: {str(ex)[:200]}",
+                    "data": {"file": safe_name}}
 
 
 # ===========================================================================
@@ -365,15 +368,16 @@ async def knowledges_retrieve_api(call_body: KnowledgesRetrieveRequest):
     t0 = time.time()
     trace = obs.trace(name="knowledges_retrieve", input=call_body.query,
                       metadata={"only_retrieval": call_body.only_retrieval})
-    # langchain callback handler：链内各阶段上报（生产 v3 接口同款，
-    # knowledges_retrieve_with_langfuse 的 handler 通道）
-    handler = obs.langchain_handler(trace)
-    ret = await knowledges_retrieve(
-        get_qa_chain, call_body.query, call_body.knowledges,
-        search_strategy=call_body.search_strategy,
-        max_recalls=call_body.max_recalls, min_score=call_body.min_score,
-        only_retrieval=call_body.only_retrieval,
-        callbacks=[handler] if handler else None)
+    with obs.trace_scope(trace):
+        # langchain callback handler：链内各阶段上报（生产 v3 接口同款，
+        # knowledges_retrieve_with_langfuse 的 handler 通道）
+        handler = obs.langchain_handler(trace)
+        ret = await knowledges_retrieve(
+            get_qa_chain, call_body.query, call_body.knowledges,
+            search_strategy=call_body.search_strategy,
+            max_recalls=call_body.max_recalls, min_score=call_body.min_score,
+            only_retrieval=call_body.only_retrieval,
+            callbacks=[handler] if handler else None)
     service_cost = time.time() - t0
     obs.generation(trace, name="retrieval",
                    output=[{"title": d.title, "score": d.score}

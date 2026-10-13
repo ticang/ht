@@ -20,12 +20,19 @@ LLM/TEI 是手写客户端，没有 langchain callback 挂点，语义等价）�
   · 所有事件带 metadata（type/route/scores 等），UI 上可按 trace 查看
   · flush 在请求结束时统一触发（生产由 SDK 后台批量刷新）
 """
+import contextvars
 import os
+import time
 import uuid
+from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 import config                                     # noqa: F401（触发 .env 加载在 import 时完成）
 from config import check_url
+
+# 当前请求的 langfuse trace（contextvars 随 async 任务自动传播——解析/检索
+# 链内部的任意组件无需层层传参即可挂到当前请求的 trace 上）
+_current_trace = contextvars.ContextVar("raglab_lf_trace", default=None)
 
 
 class Obs:
@@ -95,17 +102,18 @@ class Obs:
         demo 等价：把 handler 经 callbacks 通道挂进 qa_chain（生产
         qa_chain.acall(callbacks=...)，knowledge.py:113-117），链内各 run
         （SimpleRetrievalQA chain → ContextualCompressionRetriever →
-        SimpleHybridRetriever / 嵌入去重 / TEIRerank）自动逐级上报为
-        trace 的子节点——这就是 UI 里"检索各阶段"的来源。
+        SimpleHybridRetriever / 嵌入去重 / TEIRerank）自动逐级上报。
+        实现注意：stateful_client 直接传 trace 时 v2 的 handler 会自建
+        新 trace（root run 名字成为 trace 名）——改为先在主 trace 下开
+        langchain_runs span，把 handler 挂到这个 SPAN 上（v2 支持的父子
+        模式），run 树整体成为该 span 的子树，主 trace 名保持不变。
         未启用/失败返回 None（主链路照跑，callbacks=None）。"""
         if self.client is None or trace_obj is None:
             return None
         try:
             from langfuse.callback import CallbackHandler
-            # stateful_client：把 langchain run 树挂到已有 trace；
-            # update_stateful_client：run 树结束时回写 trace 的 output
-            return CallbackHandler(stateful_client=trace_obj,
-                                   update_stateful_client=True)
+            parent_span = trace_obj.span(name="langchain_runs")
+            return CallbackHandler(stateful_client=parent_span)
         except Exception as e:
             print(f"[obs] CallbackHandler 创建失败（忽略）: {e}", flush=True)
             return None
@@ -118,3 +126,74 @@ class Obs:
                 self.client.flush()
             except Exception as e:
                 print(f"[obs] flush 失败（忽略）: {e}", flush=True)
+
+    # ------------------------------------------------------------------
+    # contextvars 传播：请求入口设 trace，链内组件自动挂
+    # ------------------------------------------------------------------
+    @contextmanager
+    def trace_scope(self, trace_obj):
+        """把 trace 设为当前 async 上下文的活跃 trace。
+
+        用法（请求入口）：
+            trace = obs.trace(name=..., input=...)
+            with obs.trace_scope(trace):
+                <业务链路——内部任何 obs.span()/generation_call() 自动挂此 trace>
+        生产对照：@observe() 装饰器同样靠上下文把子 span 串到当前 trace
+        （langfuse_context），demo 用 contextvars 等价实现。"""
+        token = _current_trace.set(trace_obj)
+        try:
+            yield trace_obj
+        finally:
+            _current_trace.reset(token)
+
+    @contextmanager
+    def span(self, name: str, input: Any = None, metadata: Dict[str, Any] = None):
+        """在当前 trace 下挂一条 SPAN（阶段埋点，自动记耗时）。
+
+        链内组件用法（es_store/loaders/压缩管线等）：
+            with obs.span("hybrid_knn", input=query) as s:
+                docs = ...
+                if s: s.update(output={"hits": len(docs)})
+        无活跃 trace 时为 no-op（脚本裸跑/未启用 langfuse 均不影响主链路）。"""
+        trace_obj = _current_trace.get()
+        span_obj = None
+        if trace_obj is not None:
+            try:
+                span_obj = trace_obj.span(name=name, input=input,
+                                          metadata=metadata or {})
+            except Exception as e:
+                print(f"[obs] span 埋点失败（忽略）: {e}", flush=True)
+        t0 = time.perf_counter()
+        try:
+            yield span_obj
+        finally:
+            if span_obj is not None:
+                try:
+                    span_obj.update(metadata={"耗时_s": round(time.perf_counter() - t0, 3)})
+                    span_obj.end()
+                except Exception:
+                    pass
+
+    def generation_call(self, name: str, input: Any = None, output: Any = None,
+                        model: str = None, metadata: Dict[str, Any] = None,
+                        latency_s: float = None):
+        """在当前 trace 下记一条 generation（模型调用埋点：嵌入/重排/LLM）。
+        clients.py 的三个客户端在调用返回后用它上报（非上下文管理器——
+        请求-响应间隔在客户端内部已有精确计时）。无活跃 trace 时 no-op。"""
+        trace_obj = _current_trace.get()
+        if trace_obj is None:
+            return None
+        meta = dict(metadata or {})
+        if latency_s is not None:
+            meta["耗时_s"] = round(latency_s, 3)
+        try:
+            return trace_obj.generation(name=name, input=input, output=output,
+                                        model=model, metadata=meta)
+        except Exception as e:
+            print(f"[obs] generation 埋点失败（忽略）: {e}", flush=True)
+            return None
+
+
+# 模块级单例：全项目统一用它（clients/loaders/es_store/rag_demo/ingest_service/
+# api_server/eval_ragas 各处 import obs.obs），import 时读 .env 初始化
+obs = Obs()

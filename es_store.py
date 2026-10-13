@@ -27,7 +27,7 @@ from elasticsearch.helpers import bulk
 from langchain_core.documents import Document
 
 import config
-from clients import TEIEmbedClient
+from clients import TEIEmbedClient, obs          # obs：langfuse 埋点单例
 from config import check_url
 
 # bge-m3 输出维度（生产同样按模型取 dims）
@@ -119,8 +119,9 @@ class ESStore:
             d.metadata = dict(d.metadata)      # 防御：子块可能共享同一 metadata 字典
             d.metadata["_id"] = i
         t0 = time.perf_counter()
+        t_embed0 = time.perf_counter()
         vectors = self.embed.embed([d.page_content for d in docs])
-        t_embed = time.perf_counter() - t0
+        t_embed = time.perf_counter() - t_embed0
         t1 = time.perf_counter()
         actions = []
         for i, v, d in zip(ids, vectors, docs):
@@ -134,7 +135,11 @@ class ESStore:
                 text = meta.pop("original_content")
             actions.append({"_op_type": "index", "_index": self.index_name, "_id": i,
                             "vector": v, "text": text, "metadata": meta})
-        ok, _ = bulk(self.client, actions, refresh=True)
+        with obs.span("es_bulk_write",
+                      input={"docs": len(docs), "index": self.index_name}) as s:
+            ok, _ = bulk(self.client, actions, refresh=True)
+            if s:
+                s.update(output={"written": ok})
         t_bulk = time.perf_counter() - t1
         print(f"[ES] 写入 {ok} 条文档到 {self.index_name}"
               f"（向量{len(vectors[0])}维；嵌入 {t_embed:.2f}s + bulk {t_bulk:.2f}s）",
@@ -221,7 +226,10 @@ class ESStore:
 
         # step1 精确路：只取1条，命中即不参与RRF、直接置顶（:598）
         t0 = time.perf_counter()
-        keyword_matched = self.match_phrase_search(query, 1, filter)
+        with obs.span("recall_match_phrase", input={"query": query[:60]}) as s:
+            keyword_matched = self.match_phrase_search(query, 1, filter)
+            if s:
+                s.update(output={"hits": len(keyword_matched)})
         t_exact = time.perf_counter() - t0
         exact_n = len(keyword_matched)                # 后面会往里 append，先记数
         size = size - exact_n
@@ -233,16 +241,27 @@ class ESStore:
             sparse_size = math.ceil(size * alpha)
             dense_size = size - sparse_size
 
-        # step3 向量路 / step4 模糊路（各自独立查询）
+        # step3 向量路 / step4 模糊路（各自独立查询；嵌入调用在 knn_search 内
+        # 的 embed_query → clients 层的 embedding generation 一并覆盖）
         t1 = time.perf_counter()
-        sparse_matched = self.knn_search(query, sparse_size, filter) if sparse_size > 0 else []
+        with obs.span("recall_knn", input={"k": sparse_size}) as s:
+            sparse_matched = self.knn_search(query, sparse_size, filter) if sparse_size > 0 else []
+            if s:
+                s.update(output={"hits": len(sparse_matched)})
         t_vec = time.perf_counter() - t1
         t2 = time.perf_counter()
-        dense_matched = self.match_search(query, dense_size, filter) if dense_size > 0 else []
+        with obs.span("recall_match_ik", input={"size": dense_size}) as s:
+            dense_matched = self.match_search(query, dense_size, filter) if dense_size > 0 else []
+            if s:
+                s.update(output={"hits": len(dense_matched)})
         t_match = time.perf_counter() - t2
 
         # step5 RRF 融合（两路BM25/余弦分只决定名次，不直接参与数值比较）
-        ordered = fusion_ranked([alpha, 1 - alpha], [sparse_matched, dense_matched])
+        with obs.span("rrf_fusion", input={"sparse": len(sparse_matched),
+                                           "dense": len(dense_matched)}) as s:
+            ordered = fusion_ranked([alpha, 1 - alpha], [sparse_matched, dense_matched])
+            if s:
+                s.update(output={"fused": len(ordered)})
 
         # step6 精确命中按 _id 去重后置顶（:626-642）
         doc_ids = [d.metadata["_id"] for d in keyword_matched]

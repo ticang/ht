@@ -66,7 +66,7 @@ from langchain_core.documents.transformers import BaseDocumentTransformer
 
 import config                                       # noqa: F401（白名单校验在 clients 内触发）
 from classifier import QuestionClassifier, QuestionType
-from clients import build_clients
+from clients import build_clients, obs
 from es_store import ESStore
 from ingest_service import IngestService
 
@@ -110,14 +110,17 @@ class SimpleRedundantFilter(BaseDocumentTransformer):
                             **kwargs: Any) -> List[Document]:
         if len(documents) < 2:
             return list(documents)
-        vectors = self.embedder.embed([d.page_content for d in documents])
-        included = list(range(len(documents)))
-        for i in range(len(documents)):
-            if i not in included:
-                continue
-            for j in range(i + 1, len(documents)):
-                if j in included and _cosine(vectors[i], vectors[j]) > self.similarity_threshold:
-                    included.remove(j)
+        with obs.span("redundant_filter", input={"docs": len(documents)}) as s:
+            vectors = self.embedder.embed([d.page_content for d in documents])
+            included = list(range(len(documents)))
+            for i in range(len(documents)):
+                if i not in included:
+                    continue
+                for j in range(i + 1, len(documents)):
+                    if j in included and _cosine(vectors[i], vectors[j]) > self.similarity_threshold:
+                        included.remove(j)
+            if s:
+                s.update(output={"kept": len(included)})
         print(f"    [嵌入去重] {len(documents)} → {len(included)} 条", flush=True)
         return [documents[i] for i in sorted(included)]
 
@@ -142,11 +145,13 @@ class TEIRerank(BaseDocumentCompressor):
         doc_list = list(documents)
         print(f"    [重排] {len(doc_list)} 条候选交给 bge-reranker（threshold={self.threshold}, "
               f"top_n={self.top_n}）", flush=True)
-        loop = asyncio.get_event_loop()
+        # TEI 客户端是同步 requests（CPU推理本身就慢），丢线程池避免阻塞事件循环
+        # ——对应生产 acompress_documents 的异步打分。to_thread 复制 contextvars，
+        # 线程内 clients 层的 reranker 埋点才能挂上当前 trace
         t0 = time.perf_counter()
-        ranked = await loop.run_in_executor(
-            None, functools.partial(self.reranker.rerank, query,
-                                    [d.page_content for d in doc_list]))
+        ranked = await asyncio.to_thread(
+            self.reranker.rerank, query,
+            [d.page_content for d in doc_list])
         final: List[Document] = []
         for item in ranked:                              # TEI 已按 score 降序
             doc = doc_list[item["index"]]
@@ -157,6 +162,14 @@ class TEIRerank(BaseDocumentCompressor):
         scores_preview = ", ".join(f"{it['score']:.3f}" for it in ranked[:6])
         print(f"    [重排] 分数降序[{scores_preview}]，≥{self.threshold} 保留 "
               f"{len(final)} 条，耗时 {time.perf_counter() - t0:.2f}s", flush=True)
+        # langfuse：重排阶段汇总（bge-reranker 模型调用本身在 clients 层
+        # 已记 generation，这里补"过滤/截断后"的保留数）
+        obs.generation_call(name="rerank_stage",
+                            model="bge-reranker-v2-m3",
+                            input={"candidates": len(doc_list),
+                                   "threshold": self.threshold, "top_n": self.top_n},
+                            output={"kept": len(final),
+                                    "scores": [round(it["score"], 4) for it in ranked[:6]]})
         return final
 
     def compress_documents(self, documents, query, callbacks=None, **kwargs):
@@ -183,9 +196,11 @@ class SimpleHybridRetriever(BaseRetriever):
 
     async def _aget_relevant_documents(self, query: str, *, run_manager: Any = None,
                                        **kwargs: Any) -> List[Document]:
-        import functools
-        return await asyncio.get_event_loop().run_in_executor(
-            None, functools.partial(self._get_relevant_documents, query))
+        # ES 客户端是同步IO，丢线程池——生产靠 run_in_executor 同款桥接。
+        # 用 asyncio.to_thread（而非 run_in_executor）：to_thread 会复制当前
+        # contextvars，es_store.hybrid_search 里的三路召回/RRF 埋点才能
+        # 挂到本请求的 langfuse trace（线程池不会传播上下文）
+        return await asyncio.to_thread(self._get_relevant_documents, query)
 
 
 # ===========================================================================
@@ -267,10 +282,18 @@ class SimpleRetrievalQA(Chain):
             context = "\n".join(d.page_content for d in docs)[:1200]
             print(f"  [生成] {len(docs)} 条引用 / context {len(context)} 字 → 调 LLM",
                   flush=True)
+            t_llm = time.perf_counter()
             resp = await self.llm.ainvoke(QA_PROMPT.format(context=context, question=question))
             answer = resp.content if hasattr(resp, "content") else str(resp)
             print(f"  [生成] LLM 返回，答案 {len(answer)} 字，"
                   f"链路总耗时 {time.perf_counter() - t_chain:.2f}s", flush=True)
+            # langfuse：生成阶段汇总（LLM 模型调用在 clients 层已记 generation）
+            obs.generation_call(name="generation_stage", model="qa_generate",
+                                input={"question": question[:60],
+                                       "context_chars": len(context),
+                                       "citations": len(docs)},
+                                output={"answer": answer[:200]},
+                                latency_s=time.perf_counter() - t_llm)
         else:
             answer = "没有匹配到相关知识，无法回答该问题。"
         return {"result": answer, "source_documents": docs}

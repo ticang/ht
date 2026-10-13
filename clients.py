@@ -23,6 +23,11 @@ import requests
 import config
 from config import check_url
 
+# langfuse 观测单例（obs 模块提供，未启用时全部 no-op）——嵌入/重排/LLM
+# 三客户端的模型调用经 generation_call 自动挂到当前请求的 trace（生产由
+# langchain callback handler 记录 langchain 模型调用，demo 的手写客户端手动上报）
+from obs import obs                              # noqa: F401（埋点用）
+
 # 模块级会话：连接复用 + 统一走 NO_PROXY（config.py 已设置）
 _SESSION = requests.Session()
 
@@ -169,6 +174,12 @@ class TEIEmbedClient:
         print(f"[TEI:embed] ← 共 {len(vectors)}×{len(vectors[0])} 维"
               f"（{total_chars} 字，最长 {longest} 字，{len(batches)} 批），"
               f"耗时 {dt:.2f}s", flush=True)
+        # langfuse：嵌入模型调用（生产 embedding 调用同被记录）
+        obs.generation_call(name="embedding", model="bge-m3",
+                            input={"texts": len(texts), "chars": total_chars},
+                            output={"dims": len(vectors[0]) if vectors else 0,
+                                    "count": len(vectors), "batches": len(batches)},
+                            latency_s=dt)
         return vectors
 
     def embed_query(self, text: str) -> List[float]:
@@ -207,6 +218,11 @@ class TEIRerankClient:
         top1 = f"{ranked[0]['score']:.4f}" if ranked else "-"
         dt = time.perf_counter() - t0
         print(f"[TEI:rerank] ← {len(ranked)} 个分数，top1={top1}，耗时 {dt:.2f}s", flush=True)
+        # langfuse：重排模型调用（分数列表上报，生产 rerank 同被记录）
+        obs.generation_call(name="reranker", model="bge-reranker-v2-m3",
+                            input={"query": query[:60], "candidates": len(texts)},
+                            output=[round(r["score"], 4) for r in ranked[:6]],
+                            latency_s=dt)
         return ranked
 
 
@@ -258,6 +274,14 @@ class WeixinLLM:
         # 推理型模型 <think> 段可能很长——原始/净化长度差即可看出思考占了多少
         print(f"[LLM] ← 原始 {len(content)} 字（含思考）/ 净化后 {len(cleaned)} 字，"
               f"耗时 {dt:.1f}s", flush=True)
+        # langfuse：LLM 生成调用（生产 langchain LLM 由 callback 自动记录，
+        # demo 手写客户端手动上报；只记规模不记全文，避免 trace 膨胀）
+        obs.generation_call(name="llm_chat", model=self.model,
+                            input={"prompt_chars": len(prompt),
+                                   "temperature": temperature},
+                            output={"chars": len(cleaned),
+                                    "think_chars": len(content) - len(cleaned)},
+                            latency_s=dt)
         return cleaned
 
     async def ainvoke(self, prompt: str, **kwargs) -> str:

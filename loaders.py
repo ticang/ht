@@ -48,6 +48,8 @@ import openpyxl
 from langchain_core.documents import Document
 from langchain_core.document_loaders import BaseLoader
 
+from obs import obs                                  # langfuse 阶段埋点（no-op 安全）
+
 # 生产 OPSGPT_DOC_CHUNK_SIZE：excel 行转陈述句时的单块上限（excel_loader.py:14）
 DOC_CHUNK_SIZE = int(os.getenv('OPSGPT_DOC_CHUNK_SIZE', 1000))
 # 生产 word_partition.py:44 OPSGPT_TITLE_SPLIT：subject 的父/子标题分隔符
@@ -626,4 +628,9 @@ def get_file_loader(file_path: str, partition_type: str = "default",
         kwargs['knowledge_id'] = knowledge_id
     kwargs.update(loader_cfg.get('kwargs', {}))
     loader = loader_cfg['cls'](**kwargs)
+    # langfuse：类型分派阶段（哪个 loader 接了活——解析全链的第一个节点）
+    obs.generation_call(name="dispatch_loader", model=f"loader:{extension}",
+                        input={"file": os.path.basename(file_path),
+                               "partition_type": partition_type},
+                        output={"split": loader_cfg['split']})
     return loader, loader_cfg['split']
