@@ -75,6 +75,7 @@ python api_server.py          # 已激活 venv；127.0.0.1:8000
 ## 接口指南
 
 共两个业务接口：**解析入库**（上传文件→解析→写入 ES）与**检索**（问答）。
+另有评估脚本 `eval_ragas.py` 做检索质量回归（见 ③）。
 
 ---
 
@@ -148,6 +149,64 @@ title、url=来源文件、metadata）：
 ```
 
 FAQ 命中时 title=问题本身、metadata 带 `is_faq: "Y"` 与完整 `answer`。
+
+---
+
+## ③ ragas 评估 `eval_ragas.py`
+
+检索质量回归：对评估集逐题跑检索链路 → ragas 打分 → 与基线 diff。
+改了切分参数/重排阈值/模型/prompt 之后重跑一次，即可对比质量变化。
+
+前提：docker 基础设施起着（步骤 4）、索引已入库（步骤 5 启动过
+api_server 即可）、venv 已激活。judge 全程串行调 LLM，6 题约 3~5 分钟。
+
+```bash
+python eval_ragas.py --run first_run                  # 首跑：自动建立基线
+# ……修改配置（切分/重排阈值/模型/prompt）……
+python eval_ragas.py --run chunk800                   # 重跑：自动与基线 diff
+python eval_ragas.py --run chunk800 --set-baseline    # 认可新结果 → 重设基线
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--run 名字` | run 名，默认 `run_时间戳`；建议语义化（如 `chunk800`/`rerank06`），便于对比定位变更 |
+| `--set-baseline` | 把本次结果设为基线 `eval_results/baseline.json` |
+| `--eval-set 路径` | 评估集 JSONL，默认 `eval_set.jsonl` |
+
+### 指标
+
+| 指标 | 类型 | 评什么 |
+|---|---|---|
+| context_precision | LLM judge | 引用里相关块是否排在前面（检索精度） |
+| context_recall | LLM judge | 标准答案要点是否被引用覆盖（检索覆盖） |
+| faithfulness | LLM judge | 答案是否忠于引用（无编造） |
+| answer_relevancy | judge+向量 | 答案与问题的相关度 |
+| answer_correctness | LLM judge | 答案与标准答案的最终正确性（端到端） |
+| hit_rate / mrr | 确定性 | 期望文档是否被召回 / 排名几何（无 LLM，可复现） |
+| 平均延迟 | — | 每题端到端耗时 |
+
+### 评估集 `eval_set.jsonl`
+
+每行一题：`user_input`（问题）、`reference`（标准答案——要点写得越全，
+context_recall 越真实）、`source_type`（分组维度）、`expected_titles`
+（期望命中文档标题：普通知识=文件名去扩展名，FAQ=问题本身；不标则该题
+跳过硬指标）。
+
+```json
+{"user_input": "PDCP丢弃定时器的默认值是多少？",
+ "reference": "PDCP丢弃定时器（discardTimer）默认值为500毫秒，取值范围50到3000毫秒。",
+ "source_type": "word", "expected_titles": ["sample_kb"]}
+```
+
+把内置样例换成生产真实问答对（如 FAQ excel 的问题/答案列导出）即成真实评估。
+
+### 输出在哪看
+
+- **控制台**：指标均值 + 按解析类型分组 + 硬指标 + 基线 diff（指标增减、
+  跌幅超 0.02 提示回归、逐样本由对变错/由错变对）
+- **eval_results/**：`<run>.json` 逐样本分明细与配置快照；`baseline.json` 基线
+- **langfuse**（http://127.0.0.1:3000）：trace `ragas_eval`——每题检索树
+  （错题归因直接点开看三路召回/重排命中）+ ragas_scores / baseline_diff
 
 > Windows Git Bash 的 curl 传中文 JSON 会乱码，建议用 Python 客户端：
 > `requests.post(url, json={...})`
