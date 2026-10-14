@@ -59,7 +59,7 @@ import config
 from clients import build_clients
 from es_store import ESStore
 from obs import obs
-from rag_demo import build_qa_chain_factory, knowledges_retrieve
+from rag_demo import RagComponents, knowledges_retrieve
 
 KB_ID = "kb-demo"
 EVAL_SET_PATH = Path(__file__).parent / "eval_set.jsonl"
@@ -193,7 +193,7 @@ def build_judge_llm():
 # ===========================================================================
 # ② 跑预测：逐题过被测链路，收集 answer/contexts + 延迟 + 命中
 # ===========================================================================
-async def collect_answers(get_qa_chain, eval_set: list) -> list:
+async def collect_answers(rag: RagComponents, eval_set: list) -> list:
     """跑检索拿 (answer, contexts, latency, hit/mrr)。
     trace_scope 让每次检索内部的嵌入/三路召回/RRF/去重/重排/生成埋点自动
     挂到 ragas_eval 的 trace 下——错题归因时直接点开该题 span 看检索树。"""
@@ -204,7 +204,7 @@ async def collect_answers(get_qa_chain, eval_set: list) -> list:
         with obs.span("eval_retrieve", input={"question": question,
                                               "source_type": source_type}) as s:
             t0 = time.time()
-            ret = await knowledges_retrieve(get_qa_chain, question, [KB_ID],
+            ret = await knowledges_retrieve(rag, question, [KB_ID],
                                             max_recalls=4, min_score=0.5)
             latency = time.time() - t0
             titles = [d.title for d in ret["source_documents"]]
@@ -390,14 +390,14 @@ def main():
     store = ESStore(embedder)
     if not store.client.indices.exists(index=store.index_name):
         raise SystemExit("索引不存在，请先运行 rag_demo.py --reset 入库")
-    get_qa_chain = build_qa_chain_factory(store, embedder, reranker, llm, top_k=4)
+    rag = RagComponents(store, embedder, reranker, llm, top_k=4)
 
     # ① 跑预测（trace_scope 内：检索各阶段埋点自动挂本 trace）
     trace = obs.trace(name="ragas_eval",
                       input={"run": run_name,
                              "questions": [r["user_input"] for r in eval_set]})
     with obs.trace_scope(trace):
-        samples = asyncio.run(collect_answers(get_qa_chain, eval_set))
+        samples = asyncio.run(collect_answers(rag, eval_set))
 
     # ② ragas 评估（judge=微信 LLM，embeddings=TEI bge-m3）
     detail = run_ragas(samples, build_judge_llm(),

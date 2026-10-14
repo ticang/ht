@@ -34,17 +34,30 @@ _SESSION = requests.Session()
 
 def _post_with_retry(url: str, *, retryable: tuple = (requests.ConnectionError,
                                                       requests.Timeout),
-                     retries: int = 2, wait: float = 2.0, **kwargs) -> requests.Response:
-    """POST + 连接类错误重试。微信 LLM / TEI 偶发 RemoteDisconnected /
-    超时（长评估跑几十次调用必现），重试 2 次、间隔 2s；非连接类错误
-    （4xx/5xx 响应）不重试直接返回由调用方处理。
+                     retries: int = 8, wait: float = 3.0, **kwargs) -> requests.Response:
+    """POST + 连接类错误/过载重试。
+      · 连接类（RemoteDisconnected/Timeout）：重试 8 次、间隔 3s——窗口 ~24s，
+        足够覆盖 TEI 容器崩溃→重启策略拉起→模型重载完成（实测 ~15-25s），
+        崩溃对调用方透明（长评估跑几十次调用偶发必现）
+      · 过载响应（429/503）：TEI 并发许可打满（官方语义"稍后重试"，
+        双通道并发嵌入的瞬时压力偶发触发）与微信接口限流——按
+        Retry-After（无则 wait 秒）退避重试
+      · 其余 4xx/5xx 响应不重试，原样返回由调用方 raise_for_status 处理
     发请求前过 check_url 白名单校验（仅 http/https + host 白名单，与环境
     约束"发请求前校验 host"一致；URL 均来自 .env 配置，非用户输入）。"""
     url = check_url(url)                              # 每次出站前校验协议与 host
     last_err = None
     for attempt in range(retries + 1):
         try:
-            return _SESSION.post(url, **kwargs)
+            resp = _SESSION.post(url, **kwargs)
+            if resp.status_code in (429, 503) and attempt < retries:
+                pause = resp.headers.get("Retry-After", "")
+                pause = float(pause) if pause.replace(".", "", 1).isdigit() else wait
+                print(f"[http] {url.rsplit('/', 1)[-1]} {resp.status_code} 过载，"
+                      f"{pause}s 后重试 {attempt + 1}/{retries}", flush=True)
+                time.sleep(pause)
+                continue
+            return resp
         except retryable as e:
             last_err = e
             if attempt < retries:

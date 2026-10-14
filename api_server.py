@@ -54,9 +54,8 @@ from fastapi import FastAPI, File, Form, Header, UploadFile
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-# 复用 rag_demo 的检索服务层/意图识别/链工厂（模块级共享同一套实现）
-from rag_demo import (build_qa_chain_factory, knowledges_retrieve,
-                      make_sample_files)
+# 复用 rag_demo 的检索组件/意图识别（模块级共享同一套实现）
+from rag_demo import RagComponents, knowledges_retrieve, make_sample_files
 from classifier import QuestionClassifier, QuestionType
 from clients import build_clients
 from es_store import ESStore
@@ -79,7 +78,7 @@ app = FastAPI(title="rag-lab api", version="2")
 
 embedder, reranker, llm = build_clients()
 store = ESStore(embedder)
-get_qa_chain = build_qa_chain_factory(store, embedder, reranker, llm, top_k=4)
+rag = RagComponents(store, embedder, reranker, llm, top_k=4)
 classifier = QuestionClassifier(llm)
 obs = Obs()
 
@@ -203,15 +202,13 @@ async def assistant_stream(payload: AssistantRunPayload,
                 # ⑥ mcp 分支：demo 无 MCP 服务按降级语义走检索（生产 :1547-1568）
                 if qtype == QuestionType.MCP_QUERY:
                     print("  [分流] mcp 类：按生产降级语义转知识检索", flush=True)
-                # 知识检索（生产 :1609-1616 走 agent；demo 直连检索服务）
+                # 知识检索（生产 :1609-1616 走 agent；demo 直连检索服务）。
+                # 检索内各阶段（三路召回/RRF/去重/重排/生成）的埋点经
+                # trace_scope 的 contextvars 自动挂本 trace（生产走 langchain
+                # callback 通道，knowledge.py:84/:113-117，demo 直调等价）
                 t0 = time.time()
-                # langfuse：为本次 trace 创建 langchain callback handler——链内
-                # retriever/去重/重排各阶段自动逐级上报（生产同款机制，
-                # knowledge.py:84/:113-117 的 callbacks 通道）
-                handler = obs.langchain_handler(trace)
-                ret = await knowledges_retrieve(get_qa_chain, question,
-                                                [KB_ID], max_recalls=4, min_score=0.5,
-                                                callbacks=[handler] if handler else None)
+                ret = await knowledges_retrieve(rag, question, [KB_ID],
+                                                max_recalls=4, min_score=0.5)
                 docs = ret["source_documents"]
                 answer = ret["result"] or "没有匹配到相关知识，无法回答该问题。"
                 route = "knowledge_retrieve"
@@ -369,15 +366,14 @@ async def knowledges_retrieve_api(call_body: KnowledgesRetrieveRequest):
     trace = obs.trace(name="knowledges_retrieve", input=call_body.query,
                       metadata={"only_retrieval": call_body.only_retrieval})
     with obs.trace_scope(trace):
-        # langchain callback handler：链内各阶段上报（生产 v3 接口同款，
-        # knowledges_retrieve_with_langfuse 的 handler 通道）
-        handler = obs.langchain_handler(trace)
+        # 检索内各阶段的埋点（三路召回/RRF/去重/重排/生成）经 trace_scope
+        # 的 contextvars 自动挂本 trace（生产由 langchain handler 通道上报，
+        # knowledge.py:78-92，demo 直调等价）
         ret = await knowledges_retrieve(
-            get_qa_chain, call_body.query, call_body.knowledges,
+            rag, call_body.query, call_body.knowledges,
             search_strategy=call_body.search_strategy,
             max_recalls=call_body.max_recalls, min_score=call_body.min_score,
-            only_retrieval=call_body.only_retrieval,
-            callbacks=[handler] if handler else None)
+            only_retrieval=call_body.only_retrieval)
     service_cost = time.time() - t0
     obs.generation(trace, name="retrieval",
                    output=[{"title": d.title, "score": d.score}

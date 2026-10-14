@@ -96,28 +96,6 @@ class Obs:
             print(f"[obs] generation 埋点失败（忽略）: {e}", flush=True)
             return None
 
-    def langchain_handler(self, trace_obj):
-        """为指定 trace 创建 langchain CallbackHandler —— 生产
-        langfuse_context.get_current_langchain_handler()（knowledge.py:84）的
-        demo 等价：把 handler 经 callbacks 通道挂进 qa_chain（生产
-        qa_chain.acall(callbacks=...)，knowledge.py:113-117），链内各 run
-        （SimpleRetrievalQA chain → ContextualCompressionRetriever →
-        SimpleHybridRetriever / 嵌入去重 / TEIRerank）自动逐级上报。
-        实现注意：stateful_client 直接传 trace 时 v2 的 handler 会自建
-        新 trace（root run 名字成为 trace 名）——改为先在主 trace 下开
-        langchain_runs span，把 handler 挂到这个 SPAN 上（v2 支持的父子
-        模式），run 树整体成为该 span 的子树，主 trace 名保持不变。
-        未启用/失败返回 None（主链路照跑，callbacks=None）。"""
-        if self.client is None or trace_obj is None:
-            return None
-        try:
-            from langfuse.callback import CallbackHandler
-            parent_span = trace_obj.span(name="langchain_runs")
-            return CallbackHandler(stateful_client=parent_span)
-        except Exception as e:
-            print(f"[obs] CallbackHandler 创建失败（忽略）: {e}", flush=True)
-            return None
-
     def flush(self):
         """批量上报。SDK 默认后台异步刷新，请求结束/进程退出前手动 flush
         保证 demo 的 trace 即刻可见（生产 langfuse.flush 同款语义）。"""

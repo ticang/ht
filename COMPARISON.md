@@ -14,7 +14,8 @@ demo（`D:\code\python\aiops\rag-lab\`）是 aiops-chatops / aiops-agent-core �
 - 【classifier】= `aiops-agent-core/backend/agent_core/service/question_classifier.py`
 
 demo 文件位置约定：
-- 【demo-loaders】= `rag-lab/loaders.py`
+- 【demo-loaders】= `rag-lab/loaders/`（word_loader / pdf_loader / md_loader /
+  excel_loader / faq_loader 各一文件，`__init__.py` 做 FILE_LOADER_MAP 分派）
 - 【demo-split】= `rag-lab/text_splitters.py`
 - 【demo-ingest】= `rag-lab/ingest_service.py`
 - 【demo-classifier】= `rag-lab/classifier.py`
@@ -32,7 +33,7 @@ demo 文件位置约定：
 | knowledge_faq_batch_ingest（FAQ） | IngestService.faq_batch_ingest | 核心相同（双份/去重/metadata） |
 | create_stream → AssistantService.stream | assistant_ask（单接口） | 分流逻辑相同，去掉 SSE/agent/安全层 |
 | knowledges_retrieve（v3） | knowledges_retrieve | 参数与调用形态相同 |
-| qa_chain.acall（FixRetrievalQA） | SimpleQAChain / SimpleRetrievalQA | 逐环节同构 |
+| qa_chain.acall（FixRetrievalQA） | RagComponents + knowledge_qa / _search_channel 扁平直调 | 逐环节同构（无 langchain 链包装，见 §二.4） |
 | ElasticVectorSearch7.hybrid_search | ESStore.hybrid_search | 三路+RRF 相同 |
 
 ---
@@ -171,14 +172,14 @@ demo 文件位置约定：
 | 知识检索通路 | langgraph agent astream_state + 知识库转 runable tool（convert_to_runable_tool，return_direct/interrupt_before 可配） | 直连 knowledges_retrieve | ⚠异（少一层 agent/工具编排，检索本体等价） |
 | 会话状态 | thread 历史/checkpoint（get_thread_history 等） | 无状态单问 | ⚠异 |
 | langfuse 观测 | 埋点/父链传递 | print 日志 | ⚠异 |
-| 接口拆分 | /assistant_run/stream 与 /v3/knowledges/retrieve 两个 HTTP 接口 | 合并为一个 assistant_ask() | ⚠按需求合并（内部分层不变） |
+| 接口拆分 | /assistant_run/stream 与 /v3/knowledges/retrieve 两个 HTTP 接口 | 合并为一个 assistant_ask() | ⚠按需求合并（分流语义不变；检索内部已扁平直调，见 §二.3/§二.4） |
 
 ### 3. 检索服务（knowledges_retrieve）
 
 | 项 | 生产【v3 + server/service/knowledge.py:95-117】 | demo【demo-main.knowledges_retrieve】 | 异同 |
 |---|---|---|---|
-| 链组装 | 每请求 ChainFactory.get_qa_chain（:104-111） | 每请求闭包工厂（build_qa_chain_factory） | ✅同构 |
-| 调用形态 | acall(query, threshold=min_score, filter={'knowledge_base_id': knowledges})（:113-117） | 相同 | ✅同 |
+| 链组装 | 每请求 ChainFactory.get_qa_chain（:104-111） | 调用方持有 RagComponents 组件包（store/embedder/reranker/llm/top_k）直传 | ⚠demo 扁平化：不再每请求组链，行为等价 |
+| 调用形态 | acall(query, threshold=min_score, filter={'knowledge_base_id': knowledges})（:113-117） | knowledge_qa(query, threshold, filter) 直调 | ✅参数语义相同 |
 | 参数语义 | max_recalls→top_k、min_score→threshold、only_retrieval 透传 | 相同 | ✅同 |
 | search_strategy | 请求体有、service 未消费 | 同样保留形参未消费 | ✅同（连"未消费"都一致） |
 | 响应字段 | result + source_documents（:140-145） | 相同 | ✅同 |
@@ -193,7 +194,7 @@ demo 文件位置约定：
 |---|---|---|---|
 | 双通道超采样 | 文档路 4×top_k、FAQ 路 2.5×top_k（base.py:464/480） | 相同 | ✅同 |
 | FAQ 过滤 | +is_faq:'Y' | 相同 | ✅同 |
-| langchain 结构 | ContextualCompressionRetriever + DocumentCompressorPipeline | 相同 | ✅同 |
+| langchain 结构 | ContextualCompressionRetriever + DocumentCompressorPipeline | 扁平直调：_search_channel 顺序执行 ES召回→去重→重排 | ⚠结构不同、行为逐环节等价（demo 去掉 6 层链脚手架：Chain/Retriever/Compressor 包装类+管线+每请求链工厂+acall 兼容层） |
 | 嵌入去重 | FixedEmbeddingsRedundantFilter：numpy 相似矩阵、>0.95 丢后者（redundant_filter.py:42-75） | 朴素两两余弦循环，阈值/语义相同 | ⚠实现简化（结果同构） |
 | 重排五步 | 打分→降序→覆写 score→threshold→top_n（rerank.py:72-96） | 相同 | ✅同 |
 | 重排模型 | bge-m3 的 /rerank 端点（嵌入服务两用） | bge-reranker-v2-m3 专用交叉编码器（int8 ONNX） | ⚠异（demo 用更标准的 reranker 模型） |
@@ -257,6 +258,8 @@ demo 文件位置约定：
 3. 嵌入去重 numpy 矩阵 → 朴素循环
 4. 分类 prompt 瘦身（类别与边界规则全保留）
 5. md 无 pandoc 时 Python fallback；ES 查询三次独立 search
+6. 检索链扁平直调（RagComponents + knowledge_qa/_search_channel，
+   无 langchain Chain/Retriever/Compressor 包装与每请求链工厂，行为等价）
 
 **环境性差异**：
 1. 重排模型 bge-m3 两用 → bge-reranker-v2-m3 专用
@@ -293,8 +296,8 @@ demo 文件位置约定：
 | 项 | 生产 | demo | 异同 |
 |---|---|---|---|
 | 实例 | 云上 langfuse | 自托管 v2 + postgres（compose 起，seed org/project/user/API key） | ⚠自托管（按需求） |
-| 埋点方式 | @observe() 装饰器 + langchain callback handler 挂进链（knowledge.py:78-92） | 双轨：手动 trace/generation（分类/检索汇总/评估）+ 同款 CallbackHandler 经 callbacks 通道挂进 qa_chain（chain→双通道 retriever→hybrid retriever 逐级上报） | ✅同机制（callbacks 通道同名同位） |
-| 检索各阶段可见性 | langchain run 树：chain/retriever/LLM（LLM 是 langchain 模型自动记录；rerank 等 compressor 非同样不自动出现） | langchain run 树：SimpleRetrievalQA/ContextualCompressionRetriever×2/SimpleHybridRetriever×2；LLM 是手写客户端→以手动 generation（knowledges_retrieve）呈现 | ⚠LLM 粒度实现不同（自动 vs 手动） |
+| 埋点方式 | @observe() 装饰器 + langchain callback handler 挂进链（knowledge.py:78-92） | 手动 trace/span/generation：请求入口 trace_scope 设当前 trace，检索各阶段（三路召回/RRF/去重/重排/生成）经 contextvars 自动挂 | ⚠机制不同、可见性等价（demo 检索链无 langchain 组件可挂 callback） |
+| 检索各阶段可见性 | langchain run 树：chain/retriever/LLM（LLM 是 langchain 模型自动记录；rerank 等 compressor 非同样不自动出现） | span 树：recall_match_phrase / recall_knn / recall_match_ik / rrf_fusion / redundant_filter + rerank_stage / generation_stage；LLM/TEI 是手写客户端→手动 generation | ⚠形态不同（run 树 vs span 树），各阶段均可点开归因 |
 | trace 层级 | 1 trace/请求；分类/检索/生成为子节点 | 相同（question_classification / langchain run 树 / knowledges_retrieve） | ✅同 |
 | trace id | transaction_id 兼作 parent id（assistant_run.py:19-20） | transaction_id 直接作 trace id | ✅同语义 |
 | 埋点失败影响 | 旁路不影响业务 | 相同（Obs 全方法静默降级） | ✅同 |

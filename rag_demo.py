@@ -1,10 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-rag_demo.py —— aiops-chatops 知识库链路的【全真实组件】复刻 v2
+rag_demo.py —— aiops-chatops 知识库链路的【全真实组件】复刻 v3
 （多类型解析入库 + 意图识别 + 单接口检索问答）
 
-与 v1 相比的升级（本次改造目标）：
-  ① 解析：word/pdf/md/excel/faq 全类型 —— 解析逻辑对齐
+与 v2 相比的结构改造（本次目标）：检索链去嵌套——不再复刻生产的
+langchain 链式组装（Chain/BaseRetriever/BaseDocumentCompressor 包装类、
+ContextualCompressionRetriever + DocumentCompressorPipeline 管线、每请求
+链工厂闭包、acall→ainvoke 兼容层共 6 层脚手架），改为 RagComponents
+组件包 + 两层扁平函数直调，检索行为/日志/埋点逐环节等价：
+
+    assistant_ask(classifier, rag, ...)          # 会话分流（意图识别→分流）
+    └─ knowledges_retrieve(rag, ...)             # 检索服务 + 响应组装
+       └─ knowledge_qa(rag, ...)                 # 双通道并发→合并→父块还原→生成
+          └─ _search_channel(...) ×2 并发        # ES三路召回(to_thread)→嵌入去重→重排
+
+功能对齐不变（v2 确立）：
+  ① 解析：word/pdf/md/excel/faq 全类型 —— 对齐
      aiops-chatops/server/tasks/ingest.py 的 file_ingest 链
      （FILE_LOADER_MAP 分派 → 各 loader → load_and_split 父子切分 → 入库）
   ② 检索：先意图识别再检索 —— 对齐 aiops-agent-core/backend/agent_core/
@@ -12,17 +23,18 @@ rag_demo.py —— aiops-chatops 知识库链路的【全真实组件】复刻 v
      分类分流），检索本体对齐 aiops-chatops/server/api/v3/knowledge_v3.py
      的 knowledges_retrieve（KnowledgeService → qa_chain.acall）
   ③ 单接口：生产是"assistant_run /stream → 内部调 knowledges_retrieve 服务"
-     两个 HTTP 接口，demo 合成一个 assistant_ask()，内部分层不变
-  ④ langchain 切分/检索用法与生产一致：loader.load_and_split(text_splitter)、
-     ContextualCompressionRetriever + DocumentCompressorPipeline 压缩管线
+     两个 HTTP 接口，demo 合成一个 assistant_ask()，分流语义不变
+  ④ 切分侧与生产同款 langchain 用法 loader.load_and_split(text_splitter)；
+     检索侧的 langchain 链结构是生产为框架集成所需，demo 直调等价实现
 
 文件分工：
-    loaders.py         各类型解析（对齐 aichain/document_loader/）
-    text_splitters.py  父子切分（对齐 aichain/ingest/text_splitter.py）
-    ingest_service.py  入库服务（对齐 server/tasks/ingest.py 两入口）
-    classifier.py      意图识别（对齐 agent_core question_classifier.py）
-    es_store.py        ES 三路召回 + RRF（对齐 ElasticVectorSearch7）
-    clients.py         TEI 嵌入/重排 + 微信 LLM 客户端
+    loaders/          各类型解析（word/pdf/md/excel/faq 各一文件，
+                      对齐 aichain/document_loader/ 的目录形态）
+    text_splitters.py 父子切分（对齐 aichain/ingest/text_splitter.py）
+    ingest_service.py 入库服务（对齐 server/tasks/ingest.py 两入口）
+    classifier.py     意图识别（对齐 agent_core question_classifier.py）
+    es_store.py       ES 三路召回 + RRF（对齐 ElasticVectorSearch7）
+    clients.py        TEI 嵌入/重排 + 微信 LLM 客户端
     本文件             检索服务层 + 会话层（单接口）+ 端到端演示
 
 运行：
@@ -36,12 +48,11 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 import docx as docx_lib
 import openpyxl
 from langchain_core.documents import Document
-from langchain_core.prompts import PromptTemplate
 
 # 日志重定向到文件时 Python 默认块缓冲（print 攒一大块才落盘，tail 看不到实时
 # 进度）——改成按行刷新，运行时再加 PYTHONUNBUFFERED=1 双保险
@@ -50,20 +61,6 @@ try:
 except AttributeError:                              # pragma: no cover（非标准流）
     pass
 
-# ---- langchain 脚手架（0.2/0.3 兼容导入） ----
-try:
-    from langchain.chains import Chain             # langchain 0.2
-except ImportError:                                # langchain 0.3：Chain 挪到了 .base
-    from langchain.chains.base import Chain
-from langchain_core.retrievers import BaseRetriever
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import DocumentCompressorPipeline
-try:                                              # langchain 0.2：两个都在包根
-    from langchain.retrievers.document_compressors import BaseDocumentCompressor
-except ImportError:                               # langchain 0.3：挪到了 .base
-    from langchain.retrievers.document_compressors.base import BaseDocumentCompressor
-from langchain_core.documents.transformers import BaseDocumentTransformer
-
 import config                                       # noqa: F401（白名单校验在 clients 内触发）
 from classifier import QuestionClassifier, QuestionType
 from clients import build_clients, obs
@@ -71,25 +68,26 @@ from es_store import ESStore
 from ingest_service import IngestService
 
 
-async def chain_acall(chain: Chain, inputs: Dict[str, Any],
-                      callbacks: Any = None) -> Dict[str, Any]:
-    """Chain.acall→ainvoke→_acall 模板方法链的兼容封装（0.1 老 API → 新 API）。
-    callbacks：langchain 回调（生产把 langfuse 的 LangchainCallbackHandler
-    从这里传入——qa_chain.acall(callbacks=callbacks)，knowledge.py:113-117；
-    挂上后链内各 run（retriever/去重/重排）自动逐级上报 langfuse）。"""
-    if hasattr(chain, "acall"):
-        if callbacks:
-            return await chain.acall(inputs, callbacks=callbacks)
-        return await chain.acall(inputs)
-    if callbacks:
-        return await chain.ainvoke(inputs, config={"callbacks": callbacks})
-    return await chain.ainvoke(inputs)
+# ===========================================================================
+# ① 检索组件包 —— 替代生产的每请求链组装（ChainFactory.get_qa_chain，
+#    knowledge.py:104-111）。demo 不再包链对象，直接把组件递给下面的
+#    扁平函数（纯数据包，不是包装层）
+# ===========================================================================
+@dataclasses.dataclass
+class RagComponents:
+    """检索链的全部真实组件。对应生产 qa_chain 所持有的依赖：
+    ES 向量库（ElasticVectorSearch7）、嵌入（redundant_filter 用）、
+    重排器（CrossEncoderRerank）、LLM（生成）、top_k（max_recalls）。"""
+    store: Any
+    embedder: Any
+    reranker: Any
+    llm: Any
+    top_k: int = 4
 
 
 # ===========================================================================
-# ① 压缩管线（检索链内部，与 v1 相同）
-#    嵌入去重：TEI 嵌入 + 两两余弦（对应 redundant_filter.py）
-#    重排：TEI bge-reranker 交叉编码（对应 rerank.py CrossEncoderRerank）
+# ② 通道内压缩：嵌入去重 + 重排（对应生产 DocumentCompressorPipeline 的
+#    两个 transformer：redundant_filter.py + rerank.py）
 # ===========================================================================
 def _cosine(a, b) -> float:
     num = sum(x * y for x, y in zip(a, b))
@@ -98,259 +96,176 @@ def _cosine(a, b) -> float:
     return num / (da * db)
 
 
-class SimpleRedundantFilter(BaseDocumentTransformer):
-    """嵌入去重：余弦>0.95 的对丢第二个（redundant_filter.py:42-57 朴素版）。
-    langchain 0.3 的 BaseDocumentTransformer 是纯 ABC（非 pydantic）→ 普通 __init__。"""
-
-    def __init__(self, embedder, similarity_threshold: float = 0.95):
-        self.embedder = embedder
-        self.similarity_threshold = similarity_threshold
-
-    def transform_documents(self, documents: Sequence[Document],
-                            **kwargs: Any) -> List[Document]:
-        if len(documents) < 2:
-            return list(documents)
-        with obs.span("redundant_filter", input={"docs": len(documents)}) as s:
-            vectors = self.embedder.embed([d.page_content for d in documents])
-            included = list(range(len(documents)))
-            for i in range(len(documents)):
-                if i not in included:
-                    continue
-                for j in range(i + 1, len(documents)):
-                    if j in included and _cosine(vectors[i], vectors[j]) > self.similarity_threshold:
-                        included.remove(j)
-            if s:
-                s.update(output={"kept": len(included)})
-        print(f"    [嵌入去重] {len(documents)} → {len(included)} 条", flush=True)
-        return [documents[i] for i in sorted(included)]
+def _dedup_by_embedding(embedder, docs: List[Document],
+                        similarity_threshold: float = 0.95) -> List[Document]:
+    """嵌入去重：余弦>0.95 的对丢第二个（redundant_filter.py:42-57 朴素版，
+    生产 FixedEmbeddingsRedundantFilter 的两两余弦循环实现，阈值/语义相同）。"""
+    if len(docs) < 2:
+        return list(docs)
+    with obs.span("redundant_filter", input={"docs": len(docs)}) as s:
+        vectors = embedder.embed([d.page_content for d in docs])
+        included = list(range(len(docs)))
+        for i in range(len(docs)):
+            if i not in included:
+                continue
+            for j in range(i + 1, len(docs)):
+                if j in included and _cosine(vectors[i], vectors[j]) > similarity_threshold:
+                    included.remove(j)
+        if s:
+            s.update(output={"kept": len(included)})
+    print(f"    [嵌入去重] {len(docs)} → {len(included)} 条", flush=True)
+    return [docs[i] for i in sorted(included)]
 
 
-class TEIRerank(BaseDocumentCompressor):
+async def _rerank(reranker, query: str, docs: List[Document],
+                  threshold: float, top_n: int) -> List[Document]:
     """真交叉编码重排 —— rerank.py CrossEncoderRerank.acompress_documents(:72-96)
     五步同构：①TEI /rerank 打分 ②降序 ③覆写 metadata['score'] ④threshold 过滤
     ⑤截 top_n。生产双通道阈值可不同；demo 统一用 API 传入值。"""
-
-    reranker: Any
-    top_n: int = 3
-    threshold: float = 0.5
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    async def acompress_documents(self, documents: Sequence[Document], query: str,
-                                  callbacks: Any = None, **kwargs: Any) -> List[Document]:
-        if not documents:
-            return []
-        import functools
-        doc_list = list(documents)
-        print(f"    [重排] {len(doc_list)} 条候选交给 bge-reranker（threshold={self.threshold}, "
-              f"top_n={self.top_n}）", flush=True)
-        # TEI 客户端是同步 requests（CPU推理本身就慢），丢线程池避免阻塞事件循环
-        # ——对应生产 acompress_documents 的异步打分。to_thread 复制 contextvars，
-        # 线程内 clients 层的 reranker 埋点才能挂上当前 trace
-        t0 = time.perf_counter()
-        ranked = await asyncio.to_thread(
-            self.reranker.rerank, query,
-            [d.page_content for d in doc_list])
-        final: List[Document] = []
-        for item in ranked:                              # TEI 已按 score 降序
-            doc = doc_list[item["index"]]
-            doc.metadata["score"] = float(item["score"])  # ③ 覆写：交叉编码分
-            if item["score"] >= self.threshold:           # ④ 及格线
-                final.append(doc)
-        final = final[:self.top_n]                        # ⑤ 截断
-        scores_preview = ", ".join(f"{it['score']:.3f}" for it in ranked[:6])
-        print(f"    [重排] 分数降序[{scores_preview}]，≥{self.threshold} 保留 "
-              f"{len(final)} 条，耗时 {time.perf_counter() - t0:.2f}s", flush=True)
-        # langfuse：重排阶段汇总（bge-reranker 模型调用本身在 clients 层
-        # 已记 generation，这里补"过滤/截断后"的保留数）
-        obs.generation_call(name="rerank_stage",
-                            model="bge-reranker-v2-m3",
-                            input={"candidates": len(doc_list),
-                                   "threshold": self.threshold, "top_n": self.top_n},
-                            output={"kept": len(final),
-                                    "scores": [round(it["score"], 4) for it in ranked[:6]]})
-        return final
-
-    def compress_documents(self, documents, query, callbacks=None, **kwargs):
-        return asyncio.run(self.acompress_documents(documents, query))
+    if not docs:
+        return []
+    print(f"    [重排] {len(docs)} 条候选交给 bge-reranker（threshold={threshold}, "
+          f"top_n={top_n}）", flush=True)
+    # TEI 客户端是同步 requests（CPU推理本身就慢），丢线程池避免阻塞事件循环
+    # ——对应生产 acompress_documents 的异步打分。to_thread 复制 contextvars，
+    # 线程内 clients 层的 reranker 埋点才能挂上当前 trace
+    t0 = time.perf_counter()
+    ranked = await asyncio.to_thread(reranker.rerank, query,
+                                     [d.page_content for d in docs])
+    final: List[Document] = []
+    for item in ranked:                              # TEI 已按 score 降序
+        doc = docs[item["index"]]
+        doc.metadata["score"] = float(item["score"])  # ③ 覆写：交叉编码分
+        if item["score"] >= threshold:                # ④ 及格线
+            final.append(doc)
+    final = final[:top_n]                             # ⑤ 截断
+    scores_preview = ", ".join(f"{it['score']:.3f}" for it in ranked[:6])
+    print(f"    [重排] 分数降序[{scores_preview}]，≥{threshold} 保留 "
+          f"{len(final)} 条，耗时 {time.perf_counter() - t0:.2f}s", flush=True)
+    # langfuse：重排阶段汇总（bge-reranker 模型调用本身在 clients 层
+    # 已记 generation，这里补"过滤/截断后"的保留数）
+    obs.generation_call(name="rerank_stage",
+                        model="bge-reranker-v2-m3",
+                        input={"candidates": len(docs),
+                               "threshold": threshold, "top_n": top_n},
+                        output={"kept": len(final),
+                                "scores": [round(it["score"], 4) for it in ranked[:6]]})
+    return final
 
 
-# ===========================================================================
-# ② 双通道裸检索器 —— base.py:464/480（文档路4×/FAQ路2.5×+is_faq过滤）
-# ===========================================================================
-class SimpleHybridRetriever(BaseRetriever):
-    store: Any
-    top_k: int
-    multiply: float
-    filter: Optional[dict] = None
+async def _search_channel(rag: RagComponents, query: str, multiply: float,
+                          threshold: float, flt: Optional[dict]) -> List[Document]:
+    """单通道检索：ES 三路召回+RRF → 嵌入去重 → 重排。
 
-    class Config:
-        arbitrary_types_allowed = True
-
-    def _get_relevant_documents(self, query: str, *, run_manager: Any = None,
-                                **kwargs: Any) -> List[Document]:
-        """真正干活的一句：ES 三路召回 + RRF（见 es_store.hybrid_search）。"""
-        return self.store.hybrid_search(
-            query, size=math.floor(self.top_k * self.multiply), filter=self.filter)
-
-    async def _aget_relevant_documents(self, query: str, *, run_manager: Any = None,
-                                       **kwargs: Any) -> List[Document]:
-        # ES 客户端是同步IO，丢线程池——生产靠 run_in_executor 同款桥接。
-        # 用 asyncio.to_thread（而非 run_in_executor）：to_thread 会复制当前
-        # contextvars，es_store.hybrid_search 里的三路召回/RRF 埋点才能
-        # 挂到本请求的 langfuse trace（线程池不会传播上下文）
-        return await asyncio.to_thread(self._get_relevant_documents, query)
+    对应生产 base.py:464/480 的双通道裸检索器（文档路 4×top_k、FAQ 路
+    2.5×top_k）各自再包一层压缩管线（ContextualCompressionRetriever +
+    DocumentCompressorPipeline）；demo 直接顺序直调，行为等价。
+    ES 客户端是同步 IO，丢线程池避免阻塞事件循环——用 asyncio.to_thread
+    （而非 run_in_executor）：to_thread 会复制当前 contextvars，
+    es_store.hybrid_search 里的三路召回/RRF 埋点才能挂到当前请求的
+    langfuse trace（线程池不会传播上下文）。"""
+    size = math.floor(rag.top_k * multiply)
+    docs = await asyncio.to_thread(rag.store.hybrid_search, query, size, filter=flt)
+    docs = _dedup_by_embedding(rag.embedder, docs)
+    return await _rerank(rag.reranker, query, docs, threshold, rag.top_k)
 
 
 # ===========================================================================
-# ③ QA 链（检索+生成本体，与 v1 相同）—— FixRetrievalQA._acall(:281-327)
+# ③ 问答主体 —— FixRetrievalQA._acall(qa/chains/base.py:281-327)
 # ===========================================================================
-QA_PROMPT = PromptTemplate(   # 生产 PROMPT_TEMPLATES['knowledge_base_chat']
-    template="已知信息：\n{context}\n\n"
+# 生产 PROMPT_TEMPLATES['knowledge_base_chat'] 原文
+QA_PROMPT = ("已知信息：\n{context}\n\n"
              "根据上述已知信息，简洁和专业地回答用户的问题。"
              "如果无法从中得到答案，请说\"根据已知信息无法回答该问题\"，"
-             "不允许在答案中添加编造成分。问题是：{question}",
-    input_variables=["context", "question"],
-)
+             "不允许在答案中添加编造成分。问题是：{question}")
 
 
-class SimpleRetrievalQA(Chain):
-    """对应 FixRetrievalQA._acall(:281-327)：双通道并发→合并→父子还原→LLM。"""
+def _combine_faq_and_general_docs(faq_docs, general_docs) -> List[Document]:
+    """合并（base.py:237-279）：FAQ 第一名>0.85 前置 / 否则分数混排 /
+    内容去重 / 截 8。"""
+    if not faq_docs:
+        return general_docs
+    if not general_docs:
+        return faq_docs
+    if faq_docs and faq_docs[0].metadata.get("score", 0) > 0.85:
+        all_docs = faq_docs + general_docs
+    else:
+        all_docs = sorted(faq_docs + general_docs,
+                          key=lambda x: x.metadata.get("score", 0), reverse=True)
+    seen, unique = set(), []
+    for d in all_docs:
+        content = d.page_content.strip()
+        if content and content not in seen:
+            seen.add(content)
+            unique.append(d)
+    return unique[:8]
 
-    retriever: Any
-    faq_retriever: Any
-    llm: Any
-    top_k: int = 6
 
-    class Config:
-        arbitrary_types_allowed = True
+async def knowledge_qa(rag: RagComponents, query: str, threshold: float = 0.5,
+                       filter: Optional[dict] = None,
+                       only_retrieval: bool = False) -> Dict[str, Any]:
+    """双通道检索 + 生成 —— 生产 qa_chain.acall(query, threshold, filter)
+    一击的等价直调（ChainFactory.get_qa_chain → FixRetrievalQA._acall:281-327）：
+      ① 双通道并发（:307-314）：文档路 4×top_k、FAQ 路 2.5×top_k+is_faq 过滤
+      ② 合并（:237-279）
+      ③ only_retrieval 短路（v3 接口参数 / ragas 评估模式）
+      ④ 父子块还原+二次去重（_filter_docs:52-64）
+      ⑤ LLM 生成（_acall_llm_by_doc:183）——微信 Deepseek-v4-flash
+    返回 {"result": str, "source_documents": List[Document]}。"""
+    t_chain = time.perf_counter()
 
-    @property
-    def input_keys(self) -> List[str]:
-        return ["query"]
+    # ① 双通道并发（:307-314）
+    faq_docs, general_docs = await asyncio.gather(
+        _search_channel(rag, query, 2.5, threshold,
+                        {**(filter or {}), "is_faq": "Y"}),
+        _search_channel(rag, query, 4.0, threshold, filter))
 
-    @property
-    def output_keys(self) -> List[str]:
-        return ["result", "source_documents"]
+    def _top(docs, n=3):
+        return ", ".join(f"{d.metadata.get('score', 0):.3f}" for d in docs[:n])
 
-    def _call(self, inputs, run_manager=None):
-        return asyncio.run(self._acall(inputs))
+    print(f"  [双通道] FAQ路 {len(faq_docs)} 条[{_top(faq_docs)}] / "
+          f"文档路 {len(general_docs)} 条[{_top(general_docs)}]，"
+          f"检索+重排耗时 {time.perf_counter() - t_chain:.2f}s", flush=True)
 
-    async def _acall(self, inputs: Dict[str, Any], run_manager=None) -> Dict[str, Any]:
-        question = inputs["query"]
-        t_chain = time.perf_counter()
+    # ② 合并：FAQ 第一名>0.85 前置/分数混排/内容去重/截8
+    combined = _combine_faq_and_general_docs(faq_docs, general_docs)
+    pinned = bool(faq_docs) and faq_docs[0].metadata.get("score", 0) > 0.85
+    print(f"  [合并] {len(combined)} 条（{'FAQ高分前置' if pinned else '分数混排'}）",
+          flush=True)
 
-        # ① 双通道并发（:307-314）——callbacks 从 run_manager.get_child() 取
-        # 子回调传给子组件（langchain 标准传播方式）：挂 langfuse handler 时，
-        # 双通道 retriever → 压缩管线（去重/重排）会逐级上报为 trace 子节点
-        child_callbacks = run_manager.get_child() if run_manager else None
-        faq_task = (self.faq_retriever.ainvoke(question, config={"callbacks": child_callbacks})
-                    if child_callbacks else self.faq_retriever.ainvoke(question))
-        general_task = (self.retriever.ainvoke(question, config={"callbacks": child_callbacks})
-                        if child_callbacks else self.retriever.ainvoke(question))
-        faq_docs, general_docs = await asyncio.gather(faq_task, general_task)
+    # ③ 只检索不生成（ragas 评估用法 / v3 接口的 only_retrieval 参数）
+    if only_retrieval:
+        return {"result": "\n".join(d.page_content for d in combined),
+                "source_documents": combined}
 
-        def _top(docs, n=3):
-            return ", ".join(f"{d.metadata.get('score', 0):.3f}" for d in docs[:n])
+    # ④ 父子块还原+二次去重（_filter_docs:52-64）
+    docs, seen = [], set()
+    for d in combined:
+        d.page_content = d.metadata.get("parent_text") or d.page_content
+        if d.page_content not in seen:
+            seen.add(d.page_content)
+            docs.append(d)
 
-        print(f"  [双通道] FAQ路 {len(faq_docs)} 条[{_top(faq_docs)}] / "
-              f"文档路 {len(general_docs)} 条[{_top(general_docs)}]，"
-              f"检索+重排耗时 {time.perf_counter() - t_chain:.2f}s", flush=True)
-
-        # ② 合并（:237-279）：FAQ 第一名>0.85 前置/分数混排/内容去重/截8
-        combined = self._combine_faq_and_general_docs(faq_docs, general_docs)
-        pinned = bool(faq_docs) and faq_docs[0].metadata.get("score", 0) > 0.85
-        print(f"  [合并] {len(combined)} 条（{'FAQ高分前置' if pinned else '分数混排'}）",
+    # ⑤ LLM 生成（_acall_llm_by_doc:183）——微信 Deepseek-v4-flash
+    if docs:
+        context = "\n".join(d.page_content for d in docs)[:1200]
+        print(f"  [生成] {len(docs)} 条引用 / context {len(context)} 字 → 调 LLM",
               flush=True)
-
-        # ③ 只检索不生成（ragas 评估用法 / v3 接口的 only_retrieval 参数）
-        if inputs.get("only_retrieval", False):
-            return {"result": "\n".join(d.page_content for d in combined),
-                    "source_documents": combined}
-
-        # ④ 父子块还原+二次去重（_filter_docs:52-64）
-        docs, seen = [], set()
-        for d in combined:
-            d.page_content = d.metadata.get("parent_text") or d.page_content
-            if d.page_content not in seen:
-                seen.add(d.page_content)
-                docs.append(d)
-
-        # ⑤ LLM 生成（_acall_llm_by_doc:183）——微信 Deepseek-v4-flash
-        if docs:
-            context = "\n".join(d.page_content for d in docs)[:1200]
-            print(f"  [生成] {len(docs)} 条引用 / context {len(context)} 字 → 调 LLM",
-                  flush=True)
-            t_llm = time.perf_counter()
-            resp = await self.llm.ainvoke(QA_PROMPT.format(context=context, question=question))
-            answer = resp.content if hasattr(resp, "content") else str(resp)
-            print(f"  [生成] LLM 返回，答案 {len(answer)} 字，"
-                  f"链路总耗时 {time.perf_counter() - t_chain:.2f}s", flush=True)
-            # langfuse：生成阶段汇总（LLM 模型调用在 clients 层已记 generation）
-            obs.generation_call(name="generation_stage", model="qa_generate",
-                                input={"question": question[:60],
-                                       "context_chars": len(context),
-                                       "citations": len(docs)},
-                                output={"answer": answer[:200]},
-                                latency_s=time.perf_counter() - t_llm)
-        else:
-            answer = "没有匹配到相关知识，无法回答该问题。"
-        return {"result": answer, "source_documents": docs}
-
-    @staticmethod
-    def _combine_faq_and_general_docs(faq_docs, general_docs):
-        if not faq_docs:
-            return general_docs
-        if not general_docs:
-            return faq_docs
-        if faq_docs and faq_docs[0].metadata.get("score", 0) > 0.85:
-            all_docs = faq_docs + general_docs
-        else:
-            all_docs = sorted(faq_docs + general_docs,
-                              key=lambda x: x.metadata.get("score", 0), reverse=True)
-        seen, unique = set(), []
-        for d in all_docs:
-            content = d.page_content.strip()
-            if content and content not in seen:
-                seen.add(content)
-                unique.append(d)
-        return unique[:8]
-
-
-class SimpleQAChain:
-    """对应 BaseQAChain + base.py:361-420：acall→_get_chain（每请求现场组装）。"""
-
-    def __init__(self, store, embedder, reranker, llm, top_k: int = 4):
-        self.store, self.embedder, self.reranker, self.llm = store, embedder, reranker, llm
-        self.top_k = top_k
-
-    async def acall(self, query: str, threshold: float = 0.5,
-                    filter: Optional[dict] = None, callbacks: Any = None,
-                    **kwargs) -> Dict[str, Any]:
-        knowledge_chain = self._get_chain(filter, threshold)
-        inputs = {"query": query}
-        inputs.update(kwargs)
-        return await chain_acall(knowledge_chain, inputs, callbacks=callbacks)
-
-    def _get_chain(self, filter, threshold) -> Chain:
-        """base.py:361-420：裸检索器→包压缩管线→挂链字段。"""
-
-        def compressed(multiply: float, flt: Optional[dict]):
-            base = SimpleHybridRetriever(store=self.store, top_k=self.top_k,
-                                         multiply=multiply, filter=flt)
-            pipeline = DocumentCompressorPipeline(transformers=[
-                SimpleRedundantFilter(embedder=self.embedder),
-                TEIRerank(reranker=self.reranker, top_n=self.top_k,
-                          threshold=threshold),
-            ])
-            return ContextualCompressionRetriever(
-                base_compressor=pipeline, base_retriever=base)
-
-        return SimpleRetrievalQA(
-            retriever=compressed(4.0, filter),
-            faq_retriever=compressed(2.5, {**(filter or {}), "is_faq": "Y"}),
-            llm=self.llm, top_k=self.top_k)
+        t_llm = time.perf_counter()
+        resp = await rag.llm.ainvoke(QA_PROMPT.format(context=context, question=query))
+        answer = resp.content if hasattr(resp, "content") else str(resp)
+        print(f"  [生成] LLM 返回，答案 {len(answer)} 字，"
+              f"链路总耗时 {time.perf_counter() - t_chain:.2f}s", flush=True)
+        # langfuse：生成阶段汇总（LLM 模型调用在 clients 层已记 generation）
+        obs.generation_call(name="generation_stage", model="qa_generate",
+                            input={"question": query[:60],
+                                   "context_chars": len(context),
+                                   "citations": len(docs)},
+                            output={"answer": answer[:200]},
+                            latency_s=time.perf_counter() - t_llm)
+    else:
+        answer = "没有匹配到相关知识，无法回答该问题。"
+    return {"result": answer, "source_documents": docs}
 
 
 # ===========================================================================
@@ -369,45 +284,33 @@ class KnowledgeRetrieveItem:
     metadata: Dict[str, Any]
 
 
-def build_qa_chain_factory(store, embedder, reranker, llm, top_k: int = 4):
-    """生产 ChainFactory.get_qa_chain（每次请求组装链对象，knowledge.py:104-111）；
-    demo 用闭包工厂等价——knowledges_retrieve 每次调用都拿新链。"""
-
-    def get_qa_chain():
-        return SimpleQAChain(store, embedder, reranker, llm, top_k=top_k)
-
-    return get_qa_chain
-
-
-async def knowledges_retrieve(get_qa_chain, query: str, knowledges: List[str],
+async def knowledges_retrieve(rag: RagComponents, query: str, knowledges: List[str],
                               search_strategy: str = "hybrid",
                               max_recalls: int = 4, min_score: float = 0.5,
-                              only_retrieval: bool = False,
-                              callbacks: Any = None) -> Dict[str, Any]:
+                              only_retrieval: bool = False) -> Dict[str, Any]:
     """知识检索服务 —— 生产 KnowledgeService.knowledges_retrieve(knowledge.py:95-117)
     原样形态：
-        qa_chain = ChainFactory.get_qa_chain(llm=..., chain_name='knowledge_base',
-                                             top_k=max_recalls)      # :104-111
         return await qa_chain.acall(query, threshold=min_score,
                                     filter={'knowledge_base_id': knowledges},
-                                    callbacks=callbacks, **kwargs)   # :113-117
+                                    **kwargs)                     # :113-117
+    （demo 的差异：生产每请求 ChainFactory.get_qa_chain 现场组链，demo 由
+    调用方持有 RagComponents 组件包直接传入——检索本体都在 knowledge_qa）
     参数对照（v3 请求体字段，knowledge_v3.py KnowledgesRetrieveRequest）：
         knowledges     知识库 id 列表 → ES filter（terms 查询）
-        max_recalls    最大召回数 → qa_chain 的 top_k
+        max_recalls    最大召回数 → 检索的 top_k
         min_score      重排阈值 → threshold
         search_strategy 请求体里有、service 层当前未消费（生产 :95-117 同样未用），
                        demo 保留形参注明
-        only_retrieval 只检索不生成（透传给链，:82/:92 的 **kwargs 通道）
-        callbacks      langchain 回调通道（生产从 v3 接口把 langfuse 的
-                      LangchainCallbackHandler 传进来——knowledge.py:84/:91，
-                      链内 retriever/去重/重排各阶段自动上报 langfuse）
+        only_retrieval 只检索不生成（短路在 knowledge_qa 内，:82/:92 的
+                       **kwargs 通道对应）
+    （生产的 callbacks 通道——把 langfuse 的 LangchainCallbackHandler 挂进
+    langchain 链逐级上报——demo 扁平化后无链可挂：各阶段直接调 obs 埋点，
+    经 contextvars 挂到当前 trace，等价）
     返回 {"result": str, "source_documents": [KnowledgeRetrieveItem]}——
     即 knowledge_v3.py:140-145 响应体 data 的两个字段。"""
-    qa_chain = get_qa_chain()
-    retrieve_ret = await qa_chain.acall(
-        query, threshold=min_score,
+    retrieve_ret = await knowledge_qa(
+        rag, query, threshold=min_score,
         filter={"knowledge_base_id": knowledges},
-        callbacks=callbacks,
         only_retrieval=only_retrieval)
 
     # ---- 响应组装：knowledge_v3.py:93-138 ----
@@ -443,7 +346,7 @@ async def knowledges_retrieve(get_qa_chain, query: str, knowledges: List[str],
 # ⑤ 会话层（单接口）—— assistant_run.py create_stream → AssistantService.stream
 #    (assistant.py:1490-1618) 的非流式合并版
 # ===========================================================================
-async def assistant_ask(classifier: QuestionClassifier, get_qa_chain,
+async def assistant_ask(classifier: QuestionClassifier, rag: RagComponents,
                         query: str, knowledges: List[str],
                         max_recalls: int = 4, min_score: float = 0.5) -> Dict[str, Any]:
     """单个问答接口 = 生产两个接口的合并：
@@ -485,7 +388,7 @@ async def assistant_ask(classifier: QuestionClassifier, get_qa_chain,
         print("  [分流] mcp 类：demo 无 MCP 服务，按生产降级语义转知识检索", flush=True)
 
     # ⑥ 知识检索（KNOWLEDGE_QUERY 与 MCP 降级共用）
-    ret = await knowledges_retrieve(get_qa_chain, query, knowledges,
+    ret = await knowledges_retrieve(rag, query, knowledges,
                                     max_recalls=max_recalls, min_score=min_score)
     return {"type": qtype, "route": "knowledge_retrieve",
             "result": ret["result"], "source_documents": ret["source_documents"]}
@@ -687,7 +590,7 @@ A5事件门限（a5Threshold）用于基于服务小区质量恶化的切换判�
 async def main(reset: bool = False):
     t_total = time.perf_counter()
     print("=" * 70, flush=True)
-    print("rag-lab v2：多类型解析(word/pdf/md/excel/faq) → 意图识别 → 单接口检索问答", flush=True)
+    print("rag-lab v3：多类型解析(word/pdf/md/excel/faq) → 意图识别 → 单接口检索问答", flush=True)
     print("=" * 70, flush=True)
 
     # 0) 真客户端（TEI嵌入/TEI重排/微信LLM，均过 host 白名单校验）
@@ -715,8 +618,8 @@ async def main(reset: bool = False):
         print(f"[入库] {os.path.basename(str(path))}（{chain}）→ {n} 块，"
               f"耗时 {time.perf_counter() - t0:.2f}s\n", flush=True)
 
-    # 3) 检索服务 + 意图识别 + 单接口
-    get_qa_chain = build_qa_chain_factory(store, embedder, reranker, llm, top_k=4)
+    # 3) 检索组件 + 意图识别 + 单接口
+    rag = RagComponents(store, embedder, reranker, llm, top_k=4)
     classifier = QuestionClassifier(llm)
 
     # 4) 各类问题走同一个接口 assistant_ask（生产 /assistant_run/stream 的合并版）
@@ -737,7 +640,7 @@ async def main(reset: bool = False):
         print("-" * 70, flush=True)
         print(f"[提问] {query}", flush=True)
         t_q = time.perf_counter()
-        ret = await assistant_ask(classifier, get_qa_chain, query,
+        ret = await assistant_ask(classifier, rag, query,
                                   knowledges=[kb_id], max_recalls=4, min_score=0.5)
         print(f"[回答]（type={ret['type'].value}, route={ret['route']}）", flush=True)
         print(f"  {ret['result'][:200]}", flush=True)
@@ -752,8 +655,7 @@ async def main(reset: bool = False):
     # 5) only_retrieval（v3 接口的评估模式：只检索不生成）
     print("-" * 70, flush=True)
     print("[提问·只检索] A3事件偏置", flush=True)
-    r = await knowledges_retrieve(get_qa_chain, "A3事件偏置", [kb_id],
-                                  only_retrieval=True)
+    r = await knowledges_retrieve(rag, "A3事件偏置", [kb_id], only_retrieval=True)
     print(f"[检索结果] {r['result'][:200]}...", flush=True)
 
     print("=" * 70, flush=True)

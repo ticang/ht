@@ -13,8 +13,12 @@
 #                   project 名 rag-lab，卷名不变，历史 trace 保留）
 services:
   # ---------- 向量/重排（TEI）----------
+  # cpu-1.9.0：修复 1.7 的并发竞态 panic——"Queue background task dropped
+  # the receiver or the receiver is too behind: Full"（双通道并发 embed 时
+  # permit 双重获取竞态，进程直接退出；上游 issue #768 / 修复 PR #726，
+  # milestone v1.9.0）。勿回退 cpu-1.7。
   tei-embedding:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.0
     container_name: tei-embedding
     command:
       - "--model-id"
@@ -22,8 +26,12 @@ services:
       - "--auto-truncate"
       - "--max-batch-tokens"
       - "2048"
+      # 并发许可给足：CPU 推理慢（一批 1~2s），双通道检索的瞬时并发
+      # （两路查询向量+两路批量嵌入）在 8 时会打满许可 → 1.9 正确返回
+      # 429（1.7 同场景直接 panic，见顶部注释）；CPU 侧由 max_batch_
+      # requests=8 内部排队，放开许可只是不让请求被拒
       - "--max-concurrent-requests"
-      - "8"
+      - "64"
     ports:
       - "8081:80"
     volumes:
@@ -31,7 +39,7 @@ services:
     restart: unless-stopped
 
   tei-reranker:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.0
     container_name: tei-reranker
     command:
       - "--model-id"
@@ -39,8 +47,9 @@ services:
       - "--auto-truncate"
       - "--max-batch-tokens"
       - "2048"
+      # 同 tei-embedding：双通道并发重排的许可余量
       - "--max-concurrent-requests"
-      - "8"
+      - "64"
     ports:
       - "8082:80"
     volumes:
