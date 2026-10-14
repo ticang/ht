@@ -56,6 +56,20 @@ INDEX_NAME = os.getenv("INDEX_NAME", "rag_lab_demo")
 TEI_EMBED_URL = require_env("TEI_EMBED_URL")
 TEI_RERANK_URL = require_env("TEI_RERANK_URL")
 
+# ---- MCP 工单查询（可选）----
+# 留空 = mcp_client 内置 mock 工单数据（零依赖演示）；配置后走真服务，
+# host 需加入 HTTP_ALLOWED_HOSTS 白名单（如内网工单系统域名）
+MCP_TICKET_URL = os.getenv("MCP_TICKET_URL")
+
+# ---- 服务防护（api_server）----
+# RAGLAB_API_KEYS：逗号分隔的合法 key（请求头 X-API-Key）；留空 = 不鉴权
+# （demo 默认，方便 curl/docs 调试；上生产必配）
+RAGLAB_API_KEYS = {k.strip() for k in
+                   os.getenv("RAGLAB_API_KEYS", "").split(",") if k.strip()}
+# RAGLAB_RATE_LIMIT_RPM：每 key（未鉴权时按客户端 IP）每分钟请求上限；
+# 0 = 不限流
+RAGLAB_RATE_LIMIT_RPM = int(os.getenv("RAGLAB_RATE_LIMIT_RPM", "0") or 0)
+
 # ---- HTTP host 白名单 ----
 ALLOWED_HOSTS = {h.strip() for h in
                  os.getenv("HTTP_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()}

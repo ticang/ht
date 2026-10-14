@@ -68,6 +68,12 @@ def _post_with_retry(url: str, *, retryable: tuple = (requests.ConnectionError,
     raise last_err
 
 
+def probe_health(url: str, timeout: int = 3) -> bool:
+    """GET 健康探测（healthz 用）：统一过 check_url 白名单 + 复用模块会话
+    （与 _probe_limits 同款形态；失败由调用方按 False 处理）。"""
+    return _SESSION.get(check_url(url), timeout=timeout).status_code == 200
+
+
 # ===========================================================================
 # TEI 嵌入客户端 —— 对应 std_client.py 的 embed/aembed（模型 bge-m3, 1024维）
 # ===========================================================================

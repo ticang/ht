@@ -61,12 +61,18 @@ def get_text_md5(text: str) -> str:
 
 class IngestService:
     """入库门面 —— 对应生产的 ChainFactory.get_ingest_chain(chain) + ingest_from_file
-    + doc_persistent 三层（demo 合并到一个类，es_store.ESStore 承担向量库角色）。"""
+    + doc_persistent 三层（demo 合并到一个类，es_store.ESStore 承担向量库角色）。
+
+    幂等重传：file_ingest/faq_batch_ingest 入库前先按（source 文件名 +
+    knowledge_base_id）删旧块再入新块——同名文件重新上传是"替换"而非"追加"
+    （生产按 knowledge_item_id 删旧，demo 用文件名等价）。本次删除条数
+    记在 self.last_replaced（生产返回入库统计 dict，demo 简化为属性）。"""
 
     def __init__(self, store):
         """store: ESStore（真 ES 写入 + 嵌入），对应生产的
         vector_store_cls.from_documents(docs, embedding)。"""
         self.store = store
+        self.last_replaced = 0
 
     # ------------------------------------------------------------------
     # 普通知识入库 —— file_ingest(ingest.py:86-148) + file_to_vector(ingest/base.py:91)
@@ -122,6 +128,11 @@ class IngestService:
         #      ES 嵌入/bulk 各阶段在 es_store 层埋点）
         for d in docs:
             d.metadata.update(metadata)
+        # 幂等重传：先删同源旧块（source+kb 定位），再入新块——重传 = 替换
+        self.last_replaced = self.store.delete_by_metadata({
+            "source": os.path.basename(file_path),
+            "knowledge_base_id": knowledge_base_id,
+        }) if knowledge_base_id else 0
         with obs.span("es_persist", input={"docs": len(docs)}) as s:
             self.store.add_documents(docs)
             if s:
@@ -171,6 +182,12 @@ class IngestService:
 
         text_splitter = get_text_split(text_split)
         exist_md5: List[str] = []
+        # 幂等重传：先删同源旧 FAQ（source+kb 定位），再入新块（与
+        # file_ingest 同语义；生产按知识项删，demo 按文件名等价）
+        self.last_replaced = self.store.delete_by_metadata({
+            "source": os.path.basename(file_path),
+            "knowledge_base_id": knowledge_base_id,
+        }) if knowledge_base_id else 0
         total = 0
         for table in data_tables:
             # 生产 :719：50 行一批（generate_faq_data）；demo 直接整表一批
@@ -189,7 +206,9 @@ class IngestService:
                         print(f"[faq_ingest] md5 重复，跳过：{question[:20]}", flush=True)
                         continue
                     exist_md5.append(md5)
-                    # 生产 :757-785：知识项 + metadata（is_faq/answer 是关键）
+                    # 生产 :757-785：知识项 + metadata（is_faq/answer 是关键；
+                    # source 是 demo 补的字段——幂等重传按它删旧，没有它 FAQ
+                    # 的替换定位只能退到整库，风险大）
                     item_id = str(uuid.uuid4())
                     metadata = {
                         "knowledge_id": item_id,
@@ -199,6 +218,7 @@ class IngestService:
                         "chain": chain,
                         "labels": labels or [],
                         "parent_id": parent_knowledge_id,
+                        "source": os.path.basename(file_path),
                         "is_faq": "Y",                  # FAQ 检索路的过滤条件
                         "answer": answer,               # 命中后直接取，不再检索
                         "knowledge_base_id": knowledge_base_id,

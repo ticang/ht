@@ -4,3 +4,5 @@
 {"user_input": "状态报告周期的取值范围是多少？", "reference": "状态报告周期取值范围为100~1000毫秒，默认值200毫秒。", "source_type": "excel", "expected_titles": ["sample_params", "sample_kb"]}
 {"user_input": "如何重置设备的管理员密码？", "reference": "登录设备Web页面，进入系统工具→配置文件，先备份配置再选择恢复出厂设置；或使用CLI命令 reset admin-password 进行重置。", "source_type": "faq_docx", "expected_titles": ["如何重置设备的管理员密码？"]}
 {"user_input": "如何备份设备配置？", "reference": "登录设备Web页面，进入系统工具→配置文件，点击导出配置并设置加密口令。", "source_type": "faq_excel", "expected_titles": ["如何备份设备配置？"]}
+{"user_input": "5G基站的供电电压是多少伏？", "reference": "没有匹配到相关知识，无法回答该问题。", "source_type": "negative", "expected_titles": []}
+{"user_input": "如何申请办公用品报销？", "reference": "没有匹配到相关知识，无法回答该问题。", "source_type": "negative", "expected_titles": []}

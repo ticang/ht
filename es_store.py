@@ -146,6 +146,24 @@ class ESStore:
               flush=True)
 
     # ------------------------------------------------------------------
+    # 删除：按 metadata 条件（幂等重传的"先删后入"用；生产对应
+    # knowledge_items 删除时的向量库清理任务）
+    # ------------------------------------------------------------------
+    def delete_by_metadata(self, flt: dict) -> int:
+        """按 metadata 条件删除（DSL 构造复用 _filter_dsl），返回删除条数。
+        conflicts=proceed：并发写入的版本冲突跳过；refresh=True 删完立即可检。"""
+        conds = self._filter_dsl(flt)
+        if not conds:
+            return 0
+        resp = self.client.delete_by_query(
+            index=self.index_name, query={"bool": {"filter": conds}},
+            conflicts="proceed", refresh=True)
+        deleted = resp.get("deleted", 0)
+        if deleted:
+            print(f"[ES] 按 {flt} 删除 {deleted} 条（重传替换）", flush=True)
+        return deleted
+
+    # ------------------------------------------------------------------
     # 过滤 DSL：复刻 _generate_metadata_filter(:119-137)
     # ------------------------------------------------------------------
     @staticmethod

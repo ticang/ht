@@ -12,6 +12,7 @@ __pycache__/
 # 运行时产物
 uploads/
 *.log
+feedback/
 
 # 样例文件与转换中间产物（make_sample_files 运行时生成）
 sample_*.docx

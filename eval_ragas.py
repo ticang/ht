@@ -75,7 +75,8 @@ EVAL_CONFIG = {"kb": KB_ID, "max_recalls": 4, "min_score": 0.5, "top_k": 4,
 
 # 引导用默认评估集（eval_set.jsonl 缺失时生成；与样例文档逐一对应：
 # word=sample_kb / md=sample_switch / pdf=sample_transport / excel=sample_params /
-# faq_docx、faq_excel=两份 FAQ 文件。expected_titles 按 name 规则标注）
+# faq_docx、faq_excel=两份 FAQ 文件。expected_titles 按 name 规则标注；
+# negative=知识库无覆盖的负例——期望"明确拒答"而非编造）
 DEFAULT_EVAL_SET = [
     ("PDCP丢弃定时器的默认值是多少？",                # word
      "PDCP丢弃定时器（discardTimer）默认值为500毫秒，取值范围50到3000毫秒。",
@@ -96,6 +97,12 @@ DEFAULT_EVAL_SET = [
     ("如何备份设备配置？",                           # faq(excel)
      "登录设备Web页面，进入系统工具→配置文件，点击导出配置并设置加密口令。",
      "faq_excel", ["如何备份设备配置？"]),
+    ("5G基站的供电电压是多少伏？",                   # negative：知识库无覆盖，期望明确拒答
+     "没有匹配到相关知识，无法回答该问题。",
+     "negative", []),
+    ("如何申请办公用品报销？",                       # negative：同上（与 FAQ 语义相近的边界负例）
+     "没有匹配到相关知识，无法回答该问题。",
+     "negative", []),
 ]
 
 METRICS = ["context_precision", "context_recall", "faithfulness",
@@ -279,7 +286,12 @@ def summarize(detail) -> dict:
     def _mean(df, col):
         return round(float(df[col].mean()), 4) if col in df else None
 
-    overall = {m: _mean(detail, m) for m in METRICS}
+    # 负例（source_type=negative，期望"明确拒答"）不进总体均值：ragas 的
+    # faithfulness/context_* 对"正确拒答"天然低分或 NaN（引用为空），
+    # 混入会拉歪总体；负例行为在 by_type.negative 组单独呈现
+    scored = detail[detail["source_type"] != "negative"]
+
+    overall = {m: _mean(scored, m) for m in METRICS}
     hard = {"hit_rate": _mean(detail, "hit"), "mrr": _mean(detail, "rr"),
             "avg_latency_s": _mean(detail, "latency_s")}
     by_type = {}

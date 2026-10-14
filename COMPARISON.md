@@ -115,7 +115,7 @@ demo 文件位置约定：
 | 双份入库 | base_doc（"问题：q\n答案：a"）+ faq_doc（纯问题）（:787-789） | 相同 | ✅同 |
 | 分批 | 50 行一批 generate_faq_data(:643-648) | 常量保留，一次入库 | ⚠简化 |
 | base64 图片 | _rebuild_content 搬运（:377-402） | 未复刻 | ⚠异 |
-| 异步/落库 | celery 任务 + knowledge_items 状态流转 | 同步调用 | ⚠异（demo 无任务队列） |
+| 异步/落库 | celery 任务 + knowledge_items 状态流转 | API 侧 BackgroundTasks + 任务表（见 §六）；脚本侧同步 | ⚠机制同、持久化异 |
 
 ### 7. 切分（父子块）
 
@@ -168,9 +168,9 @@ demo 文件位置约定：
 | 响应形态 | SSE 流式（EventSourceResponse/to_sse，token 级输出，50s 超时 wrapper :1578-1597） | 非流式一次返回 | ⚠异（demo 无流式） |
 | 输入安全 | input_defence_by_prompt（:1500） | 跳过（无安全词库） | ⚠异 |
 | 输出安全 | get_security_words_regexes 过滤（:1571/:1599-1607） | 跳过 | ⚠异 |
-| mcp 分支 | 真实调 MCP 服务，失败降级知识库（:1547-1568） | 无 MCP 服务，直接按降级语义走知识检索（日志标明） | ⚠异（只保留降级路径） |
+| mcp 分支 | 真实调 MCP 服务，失败降级知识库（:1547-1568） | mcp_client.McpTicketClient：默认内置 mock 工单数据，可配 MCP_TICKET_URL 接真服务；成功直答（route=mcp）、服务失败降级知识检索 | ✅同语义（mock 数据是环境差异；生产 agent 传参 → demo 正则抽工单号） |
 | 知识检索通路 | langgraph agent astream_state + 知识库转 runable tool（convert_to_runable_tool，return_direct/interrupt_before 可配） | 直连 knowledges_retrieve | ⚠异（少一层 agent/工具编排，检索本体等价） |
-| 会话状态 | thread 历史/checkpoint（get_thread_history 等） | 无状态单问 | ⚠异 |
+| 会话状态 | thread 历史/checkpoint（get_thread_history 等） | api_server 内存 SessionStore + 追问改写（见 §六；rag_demo 脚本仍单问） | ⚠机制同、持久化异 |
 | langfuse 观测 | 埋点/父链传递 | print 日志 | ⚠异 |
 | 接口拆分 | /assistant_run/stream 与 /v3/knowledges/retrieve 两个 HTTP 接口 | 合并为一个 assistant_ask() | ⚠按需求合并（分流语义不变；检索内部已扁平直调，见 §二.3/§二.4） |
 
@@ -283,7 +283,7 @@ demo 文件位置约定：
 | 项 | 生产（assistant_run.py + stream.py） | demo | 异同 |
 |---|---|---|---|
 | 会话接口 | POST /stream（EventSourceResponse） | POST /api/v2/assistant_run/stream（sse-starlette） | ✅同形态 |
-| 请求体 | CreateAssitantRunPayload | question/assistant_uuid/transaction_id 三核心字段 | ⚠demo 取子集 |
+| 请求体 | CreateAssitantRunPayload | question/assistant_uuid/thread_id/transaction_id | ⚠demo 子集（thread_id 驱动多轮改写，见 §六） |
 | langfuse header | langfuse_parent_trace_id/observation_id 透传 | 同名两个 header，兼作 trace id | ✅同（简化为直接 trace id） |
 | SSE 事件序列 | metadata(run_id) → data[HumanMessage] → data[ToolMessage 引用] → data[AIMessage 流] | 完全相同序列；消息 response_metadata 键逐一对照（start_time/model_name/transaction_id/thread_id/assistant_uuid/kb_empty） | ✅同构 |
 | 回答流式性 | LLM token 级真流 | LLM 非流式，按 40 字切片同 id 消息块模拟 | ⚠近似 |
@@ -311,3 +311,19 @@ demo 文件位置约定：
 | embeddings | 平台嵌入 | TEI bge-m3（包 langchain Embeddings 接口） | ✅同模型 |
 | 指标 | —（生产未见固化指标集） | context_precision/recall + faithfulness/answer_relevancy | ⚠demo 选型 |
 | 结果上报 | — | langfuse trace（name=ragas_eval） | ⚠demo 新增 |
+
+---
+
+## 六、v4 增补（生产化补强：demo 超出复刻范围的最小生产能力）
+
+| 能力 | 生产对应 | demo 实现 | 说明 |
+|---|---|---|---|
+| 接口鉴权 | 网关/ACL 体系 | X-API-Key（`RAGLAB_API_KEYS`，逗号分隔；留空=不鉴权） | 单 key 最小实现，租户/ACL 未做 |
+| 限流 | 网关限流 | 滑动窗口每 key 每分钟（`RAGLAB_RATE_LIMIT_RPM`，0=不限） | 进程内存态 |
+| 健康检查 | k8s 探针 | `GET /healthz`：ES 挂=503，TEI 挂=200 degraded | 组件级，无鉴权 |
+| 入库幂等 | knowledge_items 删旧再入 | 同名文件+同库重传=替换（`source`+`knowledge_base_id` 先删后入） | FAQ 入库补 `source` metadata 定位 |
+| 入库异步 | celery 任务+状态流转 | BackgroundTasks + 进程内任务表 + `GET /tasks/{id}` 轮询 | 单 worker 前提 |
+| 多轮会话 | langgraph checkpoint 持久化 | SessionStore 内存态（最近 6 轮 + TTL）+ LLM 追问改写 | 重启即清；检索层保持无状态 |
+| 注入防御 | 未见（生产无） | 引用块正则拦截（中英文注入模式）+ 生成 prompt 隔离句 | demo 新增的安全护栏 |
+| 负例评估 | 未见 | eval_set `source_type=negative`（期望明确拒答），总体均值排除负例 | ragas 对正确拒答 faithfulness 天然低分 |
+| 反馈回流 | HotKnowledges 热点统计 | `POST /api/v1/feedback` 落盘 jsonl，人工挑 badcase 补评估集 | 线上反馈→离线评估闭环的原始数据 |
