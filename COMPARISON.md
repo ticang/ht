@@ -31,7 +31,7 @@ demo 文件位置约定：
 |---|---|---|
 | file_ingest（普通文件） | IngestService.file_ingest | 结构相同，周边系统省略 |
 | knowledge_faq_batch_ingest（FAQ） | IngestService.faq_batch_ingest | 核心相同（双份/去重/metadata） |
-| create_stream → AssistantService.stream | assistant_ask（单接口） | 分流逻辑相同，去掉 SSE/agent/安全层 |
+| create_stream → AssistantService.stream | graph.py StateGraph（v5）+ api_server SSE | 分流逻辑相同（v4 为扁平 assistant_ask，见 §七） |
 | knowledges_retrieve（v3） | knowledges_retrieve | 参数与调用形态相同 |
 | qa_chain.acall（FixRetrievalQA） | RagComponents + knowledge_qa / _search_channel 扁平直调 | 逐环节同构（无 langchain 链包装，见 §二.4） |
 | ElasticVectorSearch7.hybrid_search | ESStore.hybrid_search | 三路+RRF 相同 |
@@ -150,7 +150,7 @@ demo 文件位置约定：
 
 | 项 | 生产【classifier】 | demo【demo-classifier】 | 异同 |
 |---|---|---|---|
-| 9 类枚举 | identity/capability/scope/learning/service/mcp/knowledge_query/greeting/other | 相同 | ✅同 |
+| 10 类枚举 | 9 类：identity/capability/scope/learning/service/mcp/knowledge_query/greeting/other | 生产 9 类 + demo 自有 hybrid_query（工单+知识复合，走图并行分支） | ⚠demo 多一类（v5） |
 | 分类 prompt | 巨型规则+关键词清单+几十条示例（:30-271） | 保留类别定义/优先级/knowledge↔mcp 边界规则，删示例清单 | ⚠瘦身约 70%（分流正确性关键保留） |
 | 输出解析 | 小写化→type_mapping，非法落 OTHER（:329-345） | 相同 | ✅同 |
 | requires_knowledge | 仅 knowledge_query=True（_get_type_config:435-475） | 相同 | ✅同 |
@@ -160,19 +160,20 @@ demo 文件位置约定：
 | 超时 | 30s（:312） | 60s | ⚠放宽（微信接口偶发慢） |
 | 预设话术 | preset_responses 平台话术 | demo 自写等价话术（每类一句） | ⚠内容不同、机制同 |
 
-### 2. 会话分流（AssistantService.stream）
+### 2. 会话分流（v5：LangGraph StateGraph）
 
-| 项 | 生产【assistant.py:1490-1618】 | demo【demo-main.assistant_ask】 | 异同 |
+| 项 | 生产【assistant.py:1490-1618】 | demo【graph.py StateGraph】 | 异同 |
 |---|---|---|---|
-| 分流顺序 | 安全校验→分类→llm_response→preset→mcp→agent（:1500-1568） | 分类→llm_response→preset→mcp(降级)→知识检索 | ✅同序（安全层除外） |
-| 响应形态 | SSE 流式（EventSourceResponse/to_sse，token 级输出，50s 超时 wrapper :1578-1597） | 非流式一次返回 | ⚠异（demo 无流式） |
-| 输入安全 | input_defence_by_prompt（:1500） | 跳过（无安全词库） | ⚠异 |
+| 分流顺序 | 安全校验→分类→llm_response→preset→mcp→agent（:1500-1568） | load_context→rewrite→classify→条件路由：direct/preset/mcp(失败条件边降级)/rag/hybrid | ✅同序（安全层除外；v5 起图化编排） |
+| 响应形态 | SSE 流式（EventSourceResponse/to_sse，token 级输出，50s 超时 wrapper :1578-1597） | SSE 流式（api_server，~40 字分片伪流式） | ⚠事件契约同、非 token 级 |
+| 输入安全 | input_defence_by_prompt（:1500） | 跳过（注入防御在检索侧，见 §二.4） | ⚠异 |
 | 输出安全 | get_security_words_regexes 过滤（:1571/:1599-1607） | 跳过 | ⚠异 |
 | mcp 分支 | 真实调 MCP 服务，失败降级知识库（:1547-1568） | mcp_client.McpTicketClient：默认内置 mock 工单数据，可配 MCP_TICKET_URL 接真服务；成功直答（route=mcp）、服务失败降级知识检索 | ✅同语义（mock 数据是环境差异；生产 agent 传参 → demo 正则抽工单号） |
-| 知识检索通路 | langgraph agent astream_state + 知识库转 runable tool（convert_to_runable_tool，return_direct/interrupt_before 可配） | 直连 knowledges_retrieve | ⚠异（少一层 agent/工具编排，检索本体等价） |
-| 会话状态 | thread 历史/checkpoint（get_thread_history 等） | api_server 内存 SessionStore + 追问改写（见 §六；rag_demo 脚本仍单问） | ⚠机制同、持久化异 |
-| langfuse 观测 | 埋点/父链传递 | print 日志 | ⚠异 |
-| 接口拆分 | /assistant_run/stream 与 /v3/knowledges/retrieve 两个 HTTP 接口 | 合并为一个 assistant_ask() | ⚠按需求合并（分流语义不变；检索内部已扁平直调，见 §二.3/§二.4） |
+| hybrid 并行 | 无（单意图单分支） | demo 自有第 10 类 hybrid_query：mcp∥rag fan-out → summarize 汇总 | ✨demo 超出（LangGraph 并行编排的展示点） |
+| 知识检索通路 | langgraph agent astream_state + 知识库转 runable tool（convert_to_runable_tool，return_direct/interrupt_before 可配） | 图 rag 节点直连 knowledges_retrieve | ⚠异（少一层 tool 包装，检索本体等价） |
+| 会话状态 | thread 历史/checkpoint（get_thread_history 等） | ES ChatStore（raglab_chat_messages）+ 自研 ES Checkpointer（§七） | ✅同为持久化，介质 ES-only |
+| langfuse 观测 | 埋点/父链传递 | obs 直调埋点（trace_scope contextvars，图节点内 span） | ✅等价 |
+| 接口拆分 | /assistant_run/stream 与 /v3/knowledges/retrieve 两个 HTTP 接口 | 同款两个接口（stream 内部跑图） | ✅同 |
 
 ### 3. 检索服务（knowledges_retrieve）
 
@@ -323,7 +324,58 @@ demo 文件位置约定：
 | 健康检查 | k8s 探针 | `GET /healthz`：ES 挂=503，TEI 挂=200 degraded | 组件级，无鉴权 |
 | 入库幂等 | knowledge_items 删旧再入 | 同名文件+同库重传=替换（`source`+`knowledge_base_id` 先删后入） | FAQ 入库补 `source` metadata 定位 |
 | 入库异步 | celery 任务+状态流转 | BackgroundTasks + 进程内任务表 + `GET /tasks/{id}` 轮询 | 单 worker 前提 |
-| 多轮会话 | langgraph checkpoint 持久化 | SessionStore 内存态（最近 6 轮 + TTL）+ LLM 追问改写 | 重启即清；检索层保持无状态 |
+| 多轮会话 | langgraph checkpoint 持久化 | v4 SessionStore 内存态 → v5 起 ES ChatStore + 自研 ES Checkpointer（§七） | v5 起同为持久化，介质 ES-only |
 | 注入防御 | 未见（生产无） | 引用块正则拦截（中英文注入模式）+ 生成 prompt 隔离句 | demo 新增的安全护栏 |
 | 负例评估 | 未见 | eval_set `source_type=negative`（期望明确拒答），总体均值排除负例 | ragas 对正确拒答 faithfulness 天然低分 |
 | 反馈回流 | HotKnowledges 热点统计 | `POST /api/v1/feedback` 落盘 jsonl，人工挑 badcase 补评估集 | 线上反馈→离线评估闭环的原始数据 |
+
+## 七、v5 增补（架构升级：ES-only + LangGraph + LangChain + MCP）
+
+demo 从"扁平 if/else 分流"升级为 LangGraph StateGraph 编排，所有业务持久化
+收敛到 ES 单一数据平台。检索管线本体（三路召回/RRF/重排/父子块还原）不动，
+行为与 v4 逐环节等价；变化在编排层与持久化层。
+
+### 1. LangGraph 编排（graph.py，新增）
+
+| 图结构 | 生产对应 | demo 实现 |
+|---|---|---|
+| StateGraph 五路分流 | AssistantService.stream 的 if/else（assistant.py:1490-1618） | load_context→rewrite→classify→条件路由→direct/preset/mcp/rag/hybrid；mcp 失败条件边降级 rag（生产 `_stream_mcp_with_knowledge_fallback` 同语义） |
+| hybrid 并行分支 | 生产无（单意图单分支） | 分类第 10 类 hybrid_query：fan-out 并行跑 mcp∥rag 两节点，fan-in summarize 汇总（MCP 失败则汇总时如实说明） |
+| 版本 | langgraph 0.3.25（backend pyproject 钉死） | 同版 0.3.25（langgraph 1.x 要 langchain-core≥1.4，会破坏 ragas 0.2.15 钉死的 0.3 全家栈） |
+
+### 2. ES Checkpointer（es_checkpointer.py，新增，自研）
+
+| 项 | 生产对应 | demo 实现 |
+|---|---|---|
+| 后端 | 自研 MySQL/SQLite/PG（agent_core/assitant/checkpoint/，BaseCheckpointSaver 子类） | 自研 Elasticsearch 版（同基类同做法；官方/社区无 ES Checkpointer 包） |
+| 存储 | 关系表 checkpoints/writes | 单索引 `raglab_checkpoints` 双文档类型（checkpoint/write），blob=JsonPlusSerializer 二进制 base64 |
+| put_writes 语义 | sqlite saver 同款 | channel 非空先删同键再插（节点重试覆盖而非追加） |
+| 排序 | checkpoint_id 自增/时间列 | uuid6 checkpoint_id 字典序=时间序（ES keyword 倒序） |
+
+### 3. ES-only 业务持久化（es_persist.py，新增）
+
+| 数据 | v4 | v5 |
+|---|---|---|
+| 聊天历史 | SessionStore 进程内 dict（重启即清） | `raglab_chat_messages`（history 按 thread_id+ts，TTL=查询时过滤） |
+| 入库任务状态 | IngestTaskRegistry 进程内 dict（重启丢） | `raglab_tasks`（重启后 /tasks/{id} 仍可查） |
+| 用户反馈 | feedback/feedback.jsonl 文件 | `raglab_feedback` 索引 |
+| 幂等键 | 无 | Idempotency-Key 头 → 聊天记录 idem_key 字段，命中重放不重执行 |
+
+### 4. 网关与接口
+
+- `POST /api/v2/assistant_run/stream` 新增可选 `Idempotency-Key` 头（网关幂等）；
+  实现为 ES `op_type=create` 原子占位（`idem:{key}` 固定 _id，修"先查后写"
+  的 TOCTOU 竞态）+ 在途有界等待（60s）+ 引用 citations 随轮次落库、重放
+  重建 ToolMessage（重放与首次 SSE 事件序列一致）；
+- SSE 事件契约不变（metadata/HumanMessage/ToolMessage/AIMessage/error），
+  hybrid 分支同样输出 ToolMessage 知识引用；
+- 会话/任务/反馈接口签名不变，仅底层存储换 ES。
+
+### 5. 已知限制（demo 级，上生产需补）
+
+- checkpoint 无 prune：每问约 25 个 ES 文档（9KB 量级）无限累积——生产需
+  定期 `delete_thread`/ILM 生命周期策略，或给 saver 加"每线程保留最近 N 个"；
+- checkpoint 每步 `refresh=True`（读己之写正确性所需）——高吞吐下可改
+  `wait_for` 或异步刷新+定期 prune；
+- 限流计数在进程内存（多 worker 失真）；幂等等待超时（>60s 的首请求）后
+  第二个同键请求仍会执行一次（兜底语义，宁重答不挂起）。

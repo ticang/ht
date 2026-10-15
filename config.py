@@ -52,6 +52,12 @@ ES_USER = os.getenv("ES_USER")          # 可选：开了安全认证才填
 ES_PASSWORD = os.getenv("ES_PASSWORD")
 INDEX_NAME = os.getenv("INDEX_NAME", "rag_lab_demo")
 
+# ---- ES-only 持久化索引（v5：聊天/任务/反馈/checkpoint 全落同一 ES 集群）----
+CHAT_INDEX_NAME = os.getenv("CHAT_INDEX_NAME", "raglab_chat_messages")
+TASK_INDEX_NAME = os.getenv("TASK_INDEX_NAME", "raglab_tasks")
+FEEDBACK_INDEX_NAME = os.getenv("FEEDBACK_INDEX_NAME", "raglab_feedback")
+CHECKPOINT_INDEX_NAME = os.getenv("CHECKPOINT_INDEX_NAME", "raglab_checkpoints")
+
 # ---- TEI（本目录 docker compose 启动）----
 TEI_EMBED_URL = require_env("TEI_EMBED_URL")
 TEI_RERANK_URL = require_env("TEI_RERANK_URL")

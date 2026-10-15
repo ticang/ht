@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-sessions.py —— 多轮会话内存存储 + 追问改写（api_server 会话层的最小实现）
+sessions.py —— 多轮会话的追问改写器（Context Builder 的 LLM 侧）
 
-生产对照：agent_core 的 thread 历史 / langgraph checkpoint（持久化会话）；
-demo 用进程内 dict + 最近 N 轮 + TTL 懒清理——单 worker 前提（uvicorn 默认
-单进程，多 worker/重启会丢会话，生产接 redis/DB 同接口替换本类即可）。
+v4 时本文件还有个进程内 SessionStore（dict 存 thread 历史，重启即丢）；
+v5 起 ES-only 架构把会话持久化挪进 es_persist.ChatStore（raglab_chat_messages
+索引，重启/多 worker 不丢，由 graph.load_context 读取）——本文件只保留
+查询改写函数。
 
 查询改写（生产在 agent 的历史组装里完成，demo 独立成函数）：
 有历史时先把追问改写成不依赖上下文的独立问题
 （"那它的取值范围呢" → "PDCP丢弃定时器的取值范围是多少？"），
-改写后的问题用于【分类 + 检索】，原始问题原样展示给用户——检索层
-（rag_demo）保持无状态，会话是 HTTP 层概念，与分层一致。
+改写后的问题用于【分类 + 检索 + MCP】，原始问题原样展示给用户并落历史。
 """
-import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple
 
 REWRITE_PROMPT = """你是问答系统的查询改写器。用户正在进行多轮问答，当前问题可能存在指代或省略。
 请把【当前问题】改写成一个不依赖上下文、语义完整的独立问题；如果当前问题本身已经完整，原样返回。
@@ -25,41 +24,6 @@ REWRITE_PROMPT = """你是问答系统的查询改写器。用户正在进行多
 当前问题：{question}
 
 改写后的独立问题："""
-
-
-class SessionStore:
-    """thread_id → 最近 N 轮 (question, answer)。访问时懒清理过期/超量会话。"""
-
-    def __init__(self, max_turns: int = 6, ttl_s: int = 3600,
-                 max_threads: int = 1000):
-        self.max_turns = max_turns
-        self.ttl_s = ttl_s
-        self.max_threads = max_threads
-        self._store: Dict[str, Tuple[float, List[Tuple[str, str]]]] = {}
-
-    def history(self, thread_id: str) -> List[Tuple[str, str]]:
-        """取该会话的最近 N 轮（不含超出部分）；顺带做一次过期/超量清理。"""
-        self._cleanup()
-        entry = self._store.get(thread_id)
-        return list(entry[1]) if entry else []
-
-    def append(self, thread_id: str, question: str, answer: str):
-        """记一轮问答（只留最近 max_turns 轮——上下文膨胀控制）。"""
-        turns = self._store.get(thread_id, (0, []))[1]
-        turns.append((question, answer))
-        self._store[thread_id] = (time.time(), turns[-self.max_turns:])
-
-    def _cleanup(self):
-        """懒清理：删过期会话；超量时按最近活跃淘汰最旧的。"""
-        now = time.time()
-        expired = [k for k, (ts, _) in self._store.items()
-                   if now - ts > self.ttl_s]
-        for k in expired:
-            del self._store[k]
-        if len(self._store) > self.max_threads:
-            oldest = sorted(self._store, key=lambda k: self._store[k][0])
-            for k in oldest[:len(self._store) - self.max_threads]:
-                del self._store[k]
 
 
 async def rewrite_query(llm, question: str,

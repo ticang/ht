@@ -18,7 +18,8 @@ service/question_classifier.py 的 QuestionClassifier）
       · 其余（KNOWLEDGE_QUERY）→ 走 agent 知识库检索（→ knowledges_retrieve）
 
 demo 复刻范围与差异：
-    · 9 类枚举、输出格式、type_mapping、_get_type_config 全保留
+    · 9 类枚举（v5 增补第 10 类 hybrid_query——demo 自有的复合问题类，生产无）、
+      输出格式、type_mapping、_get_type_config 全保留
     · 分类 prompt 保留全部类别定义与关键判定规则，删去生产 :44-52 的关键词
       清单和 :55-75/:188-247 的几十条示例（prompt 瘦身约 70%，注释标注）；
       demo 知识域是"PDCP/切换参数"，系统名示例同步替换
@@ -32,7 +33,7 @@ from typing import Any, Dict, Optional
 
 
 class QuestionType(Enum):
-    """问题类型枚举 —— 生产 question_classifier.py:12-22 原样。"""
+    """问题类型枚举 —— 生产 question_classifier.py:12-22 原样 + v5 的 hybrid。"""
     IDENTITY = "identity"                # 身份识别类（你是谁）
     CAPABILITY = "capability"            # 问题处理能力类
     SCOPE = "scope"                      # 功能范围类
@@ -40,6 +41,7 @@ class QuestionType(Enum):
     SERVICE = "service"                  # 服务规范类
     MCP_QUERY = "mcp"                    # 工单、流程查询类
     KNOWLEDGE_QUERY = "knowledge_query"  # 知识库查询类（唯一走检索的类型）
+    HYBRID_QUERY = "hybrid_query"        # 工单+知识复合类（v5：并行 RAG+MCP）
     GREETING = "greeting"                # 问候语类型
     OTHER = "other"                      # 其他（LLM 自由作答）
 
@@ -72,6 +74,7 @@ CLASSIFICATION_PROMPT = """你是[网络创新服务支撑平台]的问题分类
 特殊规则：
 - 问题包含系统名称或应用名（如"PDCP参数"、"切换参数"等专有名词）时归此类
 - 排除：问题包含工单编号（ZW-/ATRUST-开头）或明确的工单/流程查询语句时归工单流程类
+- 排除：同一问题里既问工单进度又问业务知识（复合问题）→ 归混合类（hybrid_query）
 
 ### 3. 身份识别类
 谁、创造者、身份、你的名字、机器人、真人。示例："你是谁"、"你叫什么名字"
@@ -96,9 +99,17 @@ CLASSIFICATION_PROMPT = """你是[网络创新服务支撑平台]的问题分类
 （含故障、报错、地点、设备、"请协助"等诉求的问题应归知识库查询类，不归此类）
 示例："ZW-20261012-001 工单处理到什么进度了"、"查一下我上周提交的工单办到哪一步了"
 
+### 10. 混合类（工单+知识复合问题）
+同一问题里包含两个及以上意图：既有工单/流程查询，又有业务知识咨询。
+（只问工单相关归第9类；只问知识归第1类；两者都问才归此类；
+以问候/客套开头、后接单一工单查询的仍是单意图，归第9类，不归此类）
+示例："ZW-20261012-001 工单处理得怎么样了？顺便问下PDCP丢弃定时器默认值是多少"
+示例："查一下我上周提的工单进度，再告诉我传输时延阈值超过多少会告警"
+
 ## 输出要求
-请只返回以下8个类型之一（英文分类），不要任何解释，不要返回括号以及括号内的解释说明：
+请只返回以下9个类型之一（英文分类），不要任何解释，不要返回括号以及括号内的解释说明：
 - knowledge_query（知识库查询类）
+- hybrid_query（混合类：工单+知识复合问题）
 - identity（身份识别类）
 - capability（问题处理能力类）
 - scope（功能范围类）
@@ -163,6 +174,7 @@ class QuestionClassifier:
                 'greeting': QuestionType.GREETING,
                 'mcp': QuestionType.MCP_QUERY,
                 'knowledge_query': QuestionType.KNOWLEDGE_QUERY,
+                'hybrid_query': QuestionType.HYBRID_QUERY,
                 'other': QuestionType.OTHER,
             }
             question_type = type_mapping.get(classification_result, QuestionType.OTHER)

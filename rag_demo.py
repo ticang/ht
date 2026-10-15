@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-rag_demo.py —— aiops-chatops 知识库链路的【全真实组件】复刻 v3
-（多类型解析入库 + 意图识别 + 单接口检索问答）
+rag_demo.py —— 知识库链路的【全真实组件】复刻 v5
+（多类型解析入库 + LangGraph 意图编排 + 单接口检索问答）
 
-与 v2 相比的结构改造（本次目标）：检索链去嵌套——不再复刻生产的
-langchain 链式组装（Chain/BaseRetriever/BaseDocumentCompressor 包装类、
-ContextualCompressionRetriever + DocumentCompressorPipeline 管线、每请求
-链工厂闭包、acall→ainvoke 兼容层共 6 层脚手架），改为 RagComponents
-组件包 + 两层扁平函数直调，检索行为/日志/埋点逐环节等价：
+v5 架构（ES-only + LangGraph + LangChain + MCP）里的位置：
+  本文件 = 检索组件与检索服务的实现层（图的 rag 节点直调）+ 端到端演示；
+  编排分流在 graph.py（StateGraph：direct/preset/mcp/rag/hybrid 五路，
+  mcp 失败降级检索、hybrid 并行两路汇总），会话持久化在 es_persist.py，
+  图状态 checkpoint 在 es_checkpointer.py（自研，ES 无官方包）。
 
-    assistant_ask(classifier, rag, ...)          # 会话分流（意图识别→分流）
-    └─ knowledges_retrieve(rag, ...)             # 检索服务 + 响应组装
-       └─ knowledge_qa(rag, ...)                 # 双通道并发→合并→父块还原→生成
-          └─ _search_channel(...) ×2 并发        # ES三路召回(to_thread)→嵌入去重→重排
+    ask_graph(graph, ...)                       # graph.py：编排层
+    └─ knowledges_retrieve(rag, ...)            # 本文件：检索服务 + 响应组装
+       └─ knowledge_qa(rag, ...)                # 双通道并发→合并→父块还原→生成
+          └─ _search_channel(...) ×2 并发       # ES三路召回(to_thread)→嵌入去重→重排
 
 功能对齐不变（v2 确立）：
   ① 解析：word/pdf/md/excel/faq 全类型 —— 对齐
@@ -23,7 +23,7 @@ ContextualCompressionRetriever + DocumentCompressorPipeline 管线、每请求
      分类分流），检索本体对齐 aiops-chatops/server/api/v3/knowledge_v3.py
      的 knowledges_retrieve（KnowledgeService → qa_chain.acall）
   ③ 单接口：生产是"assistant_run /stream → 内部调 knowledges_retrieve 服务"
-     两个 HTTP 接口，demo 合成一个 assistant_ask()，分流语义不变
+     两个 HTTP 接口，demo 合成一张图一次 ainvoke，分流语义不变
   ④ 切分侧与生产同款 langchain 用法 loader.load_and_split(text_splitter)；
      检索侧的 langchain 链结构是生产为框架集成所需，demo 直调等价实现
 
@@ -32,11 +32,15 @@ ContextualCompressionRetriever + DocumentCompressorPipeline 管线、每请求
                       对齐 aichain/document_loader/ 的目录形态）
     text_splitters.py 父子切分（对齐 aichain/ingest/text_splitter.py）
     ingest_service.py 入库服务（对齐 server/tasks/ingest.py 两入口）
-    classifier.py     意图识别（对齐 agent_core question_classifier.py）
+    classifier.py     意图识别（对齐 agent_core question_classifier.py；
+                      +demo 自有的 hybrid_query 复合类）
+    graph.py          LangGraph 编排（v5 新增：五路分流 + hybrid 并行汇总）
+    es_persist.py     ES-only 业务持久化：聊天/任务/反馈（v5 新增）
+    es_checkpointer.py 自研 LangGraph ES Checkpointer（v5 新增）
     es_store.py       ES 三路召回 + RRF（对齐 ElasticVectorSearch7）
     clients.py        TEI 嵌入/重排 + 微信 LLM 客户端
     mcp_client.py     工单查询 MCP 客户端（内置 mock / 可配 URL，失败降级知识检索）
-    本文件             检索服务层 + 会话层（单接口）+ 端到端演示
+    本文件             检索服务层实现 + 端到端演示
 
 运行：
     cd rag-lab && .venv/Scripts/python rag_demo.py --reset
@@ -48,6 +52,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -63,11 +68,15 @@ except AttributeError:                              # pragma: no cover（非标�
     pass
 
 import config                                       # noqa: F401（白名单校验在 clients 内触发）
-from classifier import QuestionClassifier, QuestionType
+from classifier import QuestionClassifier
 from clients import build_clients, obs
+from es_checkpointer import EsCheckpointer
+from es_persist import ChatStore
 from es_store import ESStore
 from ingest_service import IngestService
 from mcp_client import McpTicketClient
+# graph.py 反向依赖本文件的 RagComponents/knowledges_retrieve（检索实现层），
+# 本文件只在演示入口用到图——延迟到 main() 内导入，避免模块级循环导入
 
 
 # ===========================================================================
@@ -373,65 +382,10 @@ async def knowledges_retrieve(rag: RagComponents, query: str, knowledges: List[s
 
 
 # ===========================================================================
-# ⑤ 会话层（单接口）—— assistant_run.py create_stream → AssistantService.stream
-#    (assistant.py:1490-1618) 的非流式合并版
+# ⑤ 会话层 —— v4 的扁平 assistant_ask（if/else 分流）已升级为 v5 的
+#    LangGraph 编排：见 graph.py（StateGraph 五路分流，mcp 失败降级、
+#    hybrid 并行汇总等语义逐条对照生产 AssistantService.stream :1490-1618）
 # ===========================================================================
-async def assistant_ask(classifier: QuestionClassifier, rag: RagComponents,
-                        query: str, knowledges: List[str],
-                        max_recalls: int = 4, min_score: float = 0.5,
-                        mcp: Optional[McpTicketClient] = None) -> Dict[str, Any]:
-    """单个问答接口 = 生产两个接口的合并：
-        生产：POST /assistant_run/stream（create_stream）内部分流
-              └─ 知识类 → 工具调用 → POST /v3/knowledges/retrieve（knowledges_retrieve）
-        demo：assistant_ask() 一次调用内完成两层，不拆 HTTP
-
-    分流逻辑（对照 AssistantService.stream 的行号）：
-      ① input_defence_by_prompt 输入安全校验（:1500）——demo 跳过（无安全词库）
-      ② _classify_question_with_llm 意图识别（:1503-1506）
-      ③ llm_response 有值（OTHER 类已直答）→ 直接返回（:1511-1527）
-      ④ preset_response 有值 → 预设话术返回（:1530-1545）
-      ⑤ MCP_QUERY → 生产 _stream_mcp_with_knowledge_fallback（:1547-1568）：
-         调 MCP 服务查工单/流程，成功直接返回、服务失败降级知识检索；
-         demo 用 mcp_client（默认内置 mock 数据，MCP_TICKET_URL 可接真服务）
-         等价实现；mcp=None 时（如纯检索评估场景）保持"直接降级"行为
-      ⑥ KNOWLEDGE_QUERY → 生产 agent astream_state 走知识库 tool →
-         KnowledgeService.knowledges_retrieve → qa_chain.acall；demo 直连
-         knowledges_retrieve（链路等价，少一层 agent/langgraph 编排）
-    返回 {"type", "result", "source_documents", "route"}：route 标分流路径。"""
-    # ② 意图识别
-    classification_result = await classifier.classify_question(query)
-    qtype = classification_result.get("type")
-
-    # ③ OTHER 类：分类器里已让 LLM 自由作答（question_classifier.py:353-416）
-    if classification_result.get("llm_response"):
-        return {"type": qtype, "route": "llm_response",
-                "result": classification_result["llm_response"],
-                "source_documents": []}
-
-    # ④ 预设回复（greeting/identity/...）
-    if classification_result.get("preset_response"):
-        preset = classifier.get_preset_content(classification_result["preset_response"])
-        if preset:
-            return {"type": qtype, "route": "preset_response",
-                    "result": preset, "source_documents": []}
-
-    # ⑤ MCP 分支（:1547-1568）：查询成功直接返回；服务失败/未提供客户端降级
-    if qtype == QuestionType.MCP_QUERY:
-        if mcp is not None:
-            mcp_answer = await mcp.aquery(query)
-            if mcp_answer is not None:
-                return {"type": qtype, "route": "mcp",
-                        "result": mcp_answer, "source_documents": []}
-            print("  [分流] mcp 查询失败，按生产降级语义转知识检索", flush=True)
-        else:
-            print("  [分流] mcp 类：未提供 mcp 客户端，按降级语义转知识检索",
-                  flush=True)
-
-    # ⑥ 知识检索（KNOWLEDGE_QUERY 与 MCP 降级共用）
-    ret = await knowledges_retrieve(rag, query, knowledges,
-                                    max_recalls=max_recalls, min_score=min_score)
-    return {"type": qtype, "route": "knowledge_retrieve",
-            "result": ret["result"], "source_documents": ret["source_documents"]}
 
 
 # ===========================================================================
@@ -630,7 +584,7 @@ A5事件门限（a5Threshold）用于基于服务小区质量恶化的切换判�
 async def main(reset: bool = False):
     t_total = time.perf_counter()
     print("=" * 70, flush=True)
-    print("rag-lab v3：多类型解析(word/pdf/md/excel/faq) → 意图识别 → 单接口检索问答", flush=True)
+    print("rag-lab v5：多类型解析(word/pdf/md/excel/faq) → LangGraph 编排 → 检索问答", flush=True)
     print("=" * 70, flush=True)
 
     # 0) 真客户端（TEI嵌入/TEI重排/微信LLM，均过 host 白名单校验）
@@ -658,39 +612,60 @@ async def main(reset: bool = False):
         print(f"[入库] {os.path.basename(str(path))}（{chain}）→ {n} 块，"
               f"耗时 {time.perf_counter() - t0:.2f}s\n", flush=True)
 
-    # 3) 检索组件 + 意图识别 + MCP 工单客户端 + 单接口
+    # 3) ES-only 持久化（聊天历史 + checkpoint）+ LangGraph 编排
+    #    reset 时一并清空会话/checkpoint 索引（多轮演示从干净状态开始）
+    from graph import ask_graph, build_graph       # 延迟导入（见文件头部注释）
+
+    chat_store = ChatStore()
+    if reset:
+        for idx in (chat_store.index_name, config.CHECKPOINT_INDEX_NAME):
+            if chat_store.client.indices.exists(index=idx):
+                chat_store.client.indices.delete(index=idx)
+                print(f"[ES] 已删除旧索引 {idx}", flush=True)
+    chat_store.ensure_index()
+    checkpointer = EsCheckpointer()
+    checkpointer.ensure_index()
+
     rag = RagComponents(store, embedder, reranker, llm, top_k=4)
     classifier = QuestionClassifier(llm)
     mcp = McpTicketClient()
+    graph = build_graph(classifier, rag, mcp, llm, chat_store,
+                        checkpointer=checkpointer, knowledges=[kb_id])
 
-    # 4) 各类问题走同一个接口 assistant_ask（生产 /assistant_run/stream 的合并版）
-    #    覆盖：word/md/pdf/excel 知识、FAQ、工单 MCP、预设类（identity/greeting）、
-    #    other 直答、only_retrieval 评估模式
-    questions = [
-        "PDCP丢弃定时器的默认值是多少？",        # word 知识
-        "A5事件的门限默认值是多少？",            # md 知识
-        "传输时延阈值超过多少会告警？",          # pdf 知识
-        "状态报告周期的取值范围是多少？",        # excel 知识（三元组句子）
-        "如何重置设备的管理员密码？",            # FAQ 双份（docx 源）
-        "如何备份设备配置？",                   # FAQ 双份（excel 源，生产主用形态）
-        "ZW-20261012-001 工单处理到什么进度了？",  # 工单查询 → MCP（mock 命中）
-        "我上周提的工单现在什么进度？",            # 工单查询 → MCP（无编号 → 引导）
-        "你是谁",                               # identity → 预设
-        "你好",                                 # greeting → 预设
-        "今天天气怎么样",                       # other → LLM 直答
+    # 4) 各类问题走同一张图（生产 /assistant_run/stream 的合并版）
+    #    覆盖：word/md/pdf/excel 知识、FAQ、多轮追问（同 thread 改写）、
+    #    工单 MCP、hybrid 复合（并行 RAG+MCP）、预设类、other 直答
+    demo_turns = [
+        # (问题, thread_id)：thread_id 相同 = 同一会话（第 2 问依赖第 1 问改写）
+        ("PDCP丢弃定时器的默认值是多少？", "thread-multi"),   # word 知识
+        ("那它的取值范围是多少？", "thread-multi"),          # 多轮追问 → 改写后检索
+        ("A5事件的门限默认值是多少？", None),                 # md 知识
+        ("传输时延阈值超过多少会告警？", None),               # pdf 知识
+        ("状态报告周期的取值范围是多少？", None),             # excel 知识（三元组句子）
+        ("如何重置设备的管理员密码？", None),                 # FAQ 双份（docx 源）
+        ("如何备份设备配置？", None),                        # FAQ 双份（excel 源）
+        ("ZW-20261012-001 工单处理到什么进度了？", None),     # 工单 → MCP（mock 命中）
+        ("我上周提的工单现在什么进度？", None),               # 工单 → MCP（引导给编号）
+        ("ZW-20261012-001 工单处理得怎么样了？顺便问下A5事件的门限默认值是多少？", None),
+                                                            # hybrid → 并行 MCP+RAG → 汇总
+        ("你是谁", None),                                    # identity → 预设
+        ("你好", None),                                      # greeting → 预设
+        ("今天天气怎么样", None),                             # other → LLM 直答
     ]
-    for query in questions:
+    for query, thread_id in demo_turns:
         print("-" * 70, flush=True)
-        print(f"[提问] {query}", flush=True)
+        print(f"[提问] {query}" + (f"（thread={thread_id}）" if thread_id else ""),
+              flush=True)
         t_q = time.perf_counter()
-        ret = await assistant_ask(classifier, rag, query,
-                                  knowledges=[kb_id], max_recalls=4, min_score=0.5,
-                                  mcp=mcp)
-        print(f"[回答]（type={ret['type'].value}, route={ret['route']}）", flush=True)
-        print(f"  {ret['result'][:200]}", flush=True)
-        if ret["source_documents"]:
-            print(f"[引用] {len(ret['source_documents'])} 条：", flush=True)
-            for item in ret["source_documents"][:5]:
+        state = await ask_graph(graph, query,
+                                thread_id=thread_id or f"demo-{uuid.uuid4().hex[:8]}")
+        qtype = state.get("classification", {}).get("type")
+        print(f"[回答]（type={getattr(qtype, 'value', qtype)}, "
+              f"route={state.get('route')}）", flush=True)
+        print(f"  {state.get('answer', '')[:200]}", flush=True)
+        if state.get("source_documents"):
+            print(f"[引用] {len(state['source_documents'])} 条：", flush=True)
+            for item in state["source_documents"][:5]:
                 tag = "FAQ" if item.metadata.get("is_faq") == "Y" else "文档"
                 print(f"    [{tag}] score={item.score:.3f} {item.title} | "
                       f"{item.content[:40]}...", flush=True)

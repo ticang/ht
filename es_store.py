@@ -34,6 +34,18 @@ from config import check_url
 VECTOR_DIMS = 1024
 
 
+def make_es_client(request_timeout: int = 30) -> Elasticsearch:
+    """统一的 ES 客户端构造：先过 check_url 白名单（防 SSRF），认证可选。
+
+    ESStore（RAG 索引）与 v5 的 es_persist / es_checkpointer（业务持久化
+    索引）共用同一构造——所有 ES 访问都从这里出去，白名单只钉一处。"""
+    check_url(config.ES_URL)
+    es_kwargs = {"request_timeout": request_timeout}
+    if config.ES_USER and config.ES_PASSWORD:
+        es_kwargs["basic_auth"] = (config.ES_USER, config.ES_PASSWORD)
+    return Elasticsearch(config.ES_URL, **es_kwargs)
+
+
 def fusion_ranked(weights, results):
     """加权 RRF —— 生产 elastic7_vector_search.py:323 原样移植（逻辑不变）。
 
@@ -68,12 +80,8 @@ class ESStore:
     def __init__(self, embed_client: TEIEmbedClient, index_name: str = None):
         self.embed = embed_client
         self.index_name = index_name or config.INDEX_NAME
-        # ES 连接（初始化即过白名单校验；认证可选）
-        check_url(config.ES_URL)
-        es_kwargs = {"request_timeout": 30}
-        if config.ES_USER and config.ES_PASSWORD:
-            es_kwargs["basic_auth"] = (config.ES_USER, config.ES_PASSWORD)
-        self.client = Elasticsearch(config.ES_URL, **es_kwargs)
+        # ES 连接（make_es_client 内部过白名单校验；认证可选）
+        self.client = make_es_client()
 
     # ------------------------------------------------------------------
     # 索引管理：mapping 复刻 _default_text_mapping_ik（:106-116）

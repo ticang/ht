@@ -1,0 +1,205 @@
+{
+  "run_name": "v5_graph_refactor",
+  "created_at": "2026-10-15 10:41:54",
+  "config": {
+    "kb": "kb-demo",
+    "max_recalls": 4,
+    "min_score": 0.5,
+    "top_k": 4,
+    "llm": "Deepseek-v4-flash",
+    "embedder": "bge-m3",
+    "reranker": "bge-reranker-v2-m3"
+  },
+  "overall": {
+    "context_precision": 0.8333,
+    "context_recall": 1.0,
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.9057,
+    "answer_correctness": 0.8659
+  },
+  "hard": {
+    "hit_rate": 1.0,
+    "mrr": 1.0,
+    "avg_latency_s": 12.5471
+  },
+  "by_type": {
+    "excel": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.9562,
+      "answer_correctness": 0.7365,
+      "hit_rate": 1.0
+    },
+    "faq_docx": {
+      "context_precision": 0.5,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.9628,
+      "answer_correctness": 1.0,
+      "hit_rate": 1.0
+    },
+    "faq_excel": {
+      "context_precision": 0.5,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.73,
+      "answer_correctness": 0.9085,
+      "hit_rate": 1.0
+    },
+    "md": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.967,
+      "answer_correctness": 0.9917,
+      "hit_rate": 1.0
+    },
+    "negative": {
+      "context_precision": 0.0,
+      "context_recall": 0.5,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "answer_correctness": 1.0,
+      "hit_rate": NaN
+    },
+    "pdf": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.8185,
+      "answer_correctness": 0.8389,
+      "hit_rate": 1.0
+    },
+    "word": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "answer_correctness": 0.7199,
+      "hit_rate": 1.0
+    }
+  },
+  "samples": [
+    {
+      "user_input": "PDCP丢弃定时器的默认值是多少？",
+      "source_type": "word",
+      "pass": true,
+      "hit": 1.0,
+      "rr": 1.0,
+      "latency_s": 9.931,
+      "scores": {
+        "context_precision": 0.99999999995,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.9999999999999996,
+        "answer_correctness": 0.7199243830013907
+      }
+    },
+    {
+      "user_input": "A5事件的门限默认值是多少？",
+      "source_type": "md",
+      "pass": true,
+      "hit": 1.0,
+      "rr": 1.0,
+      "latency_s": 4.403,
+      "scores": {
+        "context_precision": 0.9999999999,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.9670126017835261,
+        "answer_correctness": 0.9916896871996648
+      }
+    },
+    {
+      "user_input": "传输时延阈值超过多少会告警？",
+      "source_type": "pdf",
+      "pass": true,
+      "hit": 1.0,
+      "rr": 1.0,
+      "latency_s": 4.71,
+      "scores": {
+        "context_precision": 0.9999999999,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.8185186131802323,
+        "answer_correctness": 0.8389481258330325
+      }
+    },
+    {
+      "user_input": "状态报告周期的取值范围是多少？",
+      "source_type": "excel",
+      "pass": true,
+      "hit": 1.0,
+      "rr": 1.0,
+      "latency_s": 5.121,
+      "scores": {
+        "context_precision": 0.9999999999,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.9561627186592196,
+        "answer_correctness": 0.7365499525911576
+      }
+    },
+    {
+      "user_input": "如何重置设备的管理员密码？",
+      "source_type": "faq_docx",
+      "pass": true,
+      "hit": 1.0,
+      "rr": 1.0,
+      "latency_s": 10.515,
+      "scores": {
+        "context_precision": 0.49999999995,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.9627660661798103,
+        "answer_correctness": 1.0
+      }
+    },
+    {
+      "user_input": "如何备份设备配置？",
+      "source_type": "faq_excel",
+      "pass": true,
+      "hit": 1.0,
+      "rr": 1.0,
+      "latency_s": 58.111,
+      "scores": {
+        "context_precision": 0.49999999995,
+        "context_recall": 1.0,
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.729970307780075,
+        "answer_correctness": 0.9085172367307608
+      }
+    },
+    {
+      "user_input": "5G基站的供电电压是多少伏？",
+      "source_type": "negative",
+      "pass": true,
+      "hit": NaN,
+      "rr": NaN,
+      "latency_s": 4.139,
+      "scores": {
+        "context_precision": 0.0,
+        "context_recall": 0.0,
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0,
+        "answer_correctness": 1.0
+      }
+    },
+    {
+      "user_input": "如何申请办公用品报销？",
+      "source_type": "negative",
+      "pass": true,
+      "hit": NaN,
+      "rr": NaN,
+      "latency_s": 3.447,
+      "scores": {
+        "context_precision": 0.0,
+        "context_recall": 1.0,
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0,
+        "answer_correctness": 1.0
+      }
+    }
+  ]
+}

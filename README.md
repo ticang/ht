@@ -1,5 +1,12 @@
 # rag-lab 接口调用指南
 
+> **v5 架构**：ES-only + LangGraph + LangChain + MCP。LangGraph StateGraph
+> 负责编排（意图路由 → 知识检索 / 工单 MCP / hybrid 并行 / 预设 / 直答），
+> LangChain 组件负责 RAG（双通道三路召回 + RRF + 重排 + 生成），所有需要
+> 持久化的数据（聊天历史 / 图 checkpoint / 入库任务 / 用户反馈 / RAG 文档）
+> 全部落在同一个 Elasticsearch 集群。图拓扑与五模块分层详见 `graph.py`
+> 文件头与 `COMPARISON.md` §七。
+
 ## 启动项目（从零开始）
 
 ### 0. 前置
@@ -180,32 +187,50 @@ FAQ 命中时 title=问题本身、metadata 带 `is_faq: "Y"` 与完整 `answer`
 
 ## ③ 会话问答 `POST /api/v2/assistant_run/stream`（SSE）
 
-意图分流 + 多轮会话的流式接口：分类（知识/工单/预设/闲聊）→ 知识类走 ② 的
-检索链路、工单类（ZW-/ATRUST- 编号或工单进度查询）调 MCP、其余直答；
-SSE 事件序列 `metadata(run_id) → data[HumanMessage] → data[ToolMessage 引用]
-→ data[AIMessage...]`。
+意图分流 + 多轮会话的流式接口（v5 起分流由 **LangGraph StateGraph** 编排，
+见 `graph.py`）：load_context 读 ES 历史 → 追问改写 → 意图分类 → 五路分流
+（知识检索 / 工单 MCP / hybrid 复合并行 / 预设 / 闲聊直答）；工单服务失败
+自动降级知识检索；SSE 事件序列 `metadata(run_id) → data[HumanMessage] →
+data[ToolMessage 引用] → data[AIMessage...]`。
 
-**多轮**：客户端携带同一个 `thread_id` 连续提问，服务端把追问改写成独立
-问题再检索（"那它的取值范围呢" → "PDCP丢弃定时器的取值范围是多少"）；
-不传 `thread_id` 每次都是新会话。会话为进程内存态（重启即清、单 worker）。
+**多轮（v5 起 ES 持久化）**：客户端携带同一个 `thread_id` 连续提问，服务端
+把追问改写成独立问题再检索（"那它的取值范围呢" → "PDCP丢弃定时器的取值
+范围是多少"）；不传 `thread_id` 每次都是新会话。历史落 `raglab_chat_messages`
+索引——**服务重启/多 worker 不丢会话**；图状态同时由 `raglab_checkpoints`
+（自研 ES Checkpointer）逐 step 落盘，可回放。
 
 ```bash
 curl -N -X POST http://127.0.0.1:8000/api/v2/assistant_run/stream \
      -H "Content-Type: application/json" \
      -d '{"question":"PDCP丢弃定时器的默认值是多少？","thread_id":"demo-thread-1"}'
-# 第二轮（同一 thread_id）：
+# 第二轮（同一 thread_id，重启服务后仍然有效）：
 #    {"question":"那它的取值范围呢？","thread_id":"demo-thread-1"}
+```
+
+**幂等（v5 新增）**：请求带 `Idempotency-Key` 头时，同键请求直接重放
+已存答案（含知识引用 ToolMessage，事件序列与首次一致；不重执行图、
+不重复落历史）——客户端超时重试不会产生重复回答。同键并发时，后到
+请求原子抢占失败后**有界等待**（最多 60s）首个请求完成后重放；等待
+超时才按普通请求执行（极端兜底，不无限卡请求）。
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/api/v2/assistant_run/stream \
+     -H "Content-Type: application/json" -H "Idempotency-Key: order-123" \
+     -d '{"question":"A5事件的门限默认值是多少？"}'
 ```
 
 **工单 MCP**：问题分类为工单类时先调工单服务（默认内置 mock 数据；配
 `MCP_TICKET_URL` 接真服务），成功直接返回工单进度；服务失败自动降级知识检索。
+**hybrid 复合问题**（工单+知识，如"ZW-xxx 进度如何？顺便问下 A5 门限默认值"）
+并行跑 MCP+RAG 两路再汇总作答。
 
 ---
 
 ## ④ 反馈 `POST /api/v1/feedback` + 健康检查
 
-点赞/点踩落盘 `feedback/feedback.jsonl`——"线上反馈 → 离线评估"回流的原始
-数据：定期从 `down` 里挑 badcase 补进 `eval_set.jsonl` 再跑 ragas 基线对比。
+点赞/点踩落 ES `raglab_feedback` 索引（v5 起 ES-only，原 jsonl 文件停用）
+——"线上反馈 → 离线评估"回流的原始数据：定期从 `down` 里挑 badcase 补进
+`eval_set.jsonl` 再跑 ragas 基线对比。
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/feedback -H "Content-Type: application/json" \

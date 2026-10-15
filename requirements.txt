@@ -21,3 +21,10 @@ python-multipart>=0.0.9    # 上传接口 multipart 解析
 langfuse>=2.57,<3          # 观测 SDK（配自托管 langfuse v2 server）
 ragas==0.2.15              # RAG 评估（0.4.x 与 langchain 0.3 全家不兼容）
 langchain-openai<0.4       # ragas judge LLM 接微信 OpenAI 兼容接口
+
+# v5：LangGraph 编排 + ES-only 持久化（checkpointer 自研，见 es_checkpointer.py；
+# 官方/社区均无 ES Checkpointer 包，生产 aiops-agent-core 同为自研 MySQL/SQLite 版）。
+# 版本与生产 aiops-agent-core 对齐（0.3.25）——langgraph 1.x 要求 langchain-core>=1.4，
+# 会破坏本 demo 钉死的 0.3 全家栈（ragas 0.2.15 / langchain-openai<0.4）
+langgraph>=0.3.25,<0.4
+langgraph-checkpoint>=2,<3

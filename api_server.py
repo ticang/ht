@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-api_server.py —— FastAPI 服务版（复刻生产的两个 HTTP 接口，SSE 流式）
+api_server.py —— FastAPI 服务版（v5：网关 + LangGraph 编排入口）
+
+架构位置（"ES-only + LangGraph + LangChain + MCP"五模块）：
+  【会话层/网关】鉴权（X-API-Key）+ 限流（RPM 滑窗）+ 幂等键
+  （Idempotency-Key 重放）+ 会话管理（thread_id → ES 聊天历史）
+  【编排层】assistant_stream → graph.ainvoke（graph.py 的 StateGraph 五路分流）
+  【数据层】聊天/任务/反馈/checkpoint 全落 ES（es_persist/es_checkpointer）
 
 生产对照：
   ① aiops-agent-core/backend/agent_core/api/v2/assistant_run.py:32-48
@@ -26,9 +32,8 @@ assistant.py:2329-2403 _stream_preset_response 的消息序列）：
      demo 的 LLM 客户端非流式，按 ~40 字切片产生同 id 的消息块模拟流式）
   ⑤ 异常 → event: error（to_sse:204-215）
 
-分流逻辑与 rag_demo.assistant_ask 完全一致（安全校验跳过/llm_response/
-preset/mcp 降级/知识检索，对照 assistant.py:1500-1568），差异仅在输出形态
-（SSE 消息流 vs dict）与 langfuse 埋点开启。
+v5 与 v4 的差异：分流逻辑从本文件内联 if/else 移入 graph.py（行为等价 +
+hybrid 并行分支）；会话历史/幂等/任务/反馈/checkpoint 全部落 ES（重启不丢）。
 
 启动：
     .venv/Scripts/python api_server.py            # 索引不存在时自动入库样例
@@ -45,7 +50,6 @@ import asyncio
 import json
 import os
 import sys
-import threading
 import time
 import uuid
 from datetime import datetime
@@ -59,21 +63,23 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-# 复用 rag_demo 的检索组件/意图识别（模块级共享同一套实现）
+# 复用 rag_demo 的检索组件（模块级共享同一套实现）；编排与持久化见各专责模块
 from rag_demo import RagComponents, knowledges_retrieve, make_sample_files
-from classifier import QuestionClassifier, QuestionType
+from classifier import QuestionClassifier
 from clients import build_clients, probe_health as clients_probe
+from es_checkpointer import EsCheckpointer
+from es_persist import ChatStore, EsTaskRegistry, FeedbackStore
 from es_store import ESStore
+from graph import ask_graph, build_graph
 from ingest_service import IngestService
 from mcp_client import McpTicketClient
 from obs import Obs
-from sessions import SessionStore, rewrite_query
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 try:
     sys.stdout.reconfigure(line_buffering=True)
-except AttributeError:                              # pragma: no cover
+except AttributeError:                              # pragma: no cover（非标准流）
     pass
 
 KB_ID = "kb-demo"
@@ -81,7 +87,7 @@ KB_ID = "kb-demo"
 # ===========================================================================
 # 应用与全局单例（生产：每次请求 ChainFactory 组装；客户端/存储为进程级单例）
 # ===========================================================================
-app = FastAPI(title="rag-lab api", version="2")
+app = FastAPI(title="rag-lab api", version="5")
 
 embedder, reranker, llm = build_clients()
 store = ESStore(embedder)
@@ -89,7 +95,17 @@ rag = RagComponents(store, embedder, reranker, llm, top_k=4)
 classifier = QuestionClassifier(llm)
 mcp = McpTicketClient()
 obs = Obs()
-sessions = SessionStore()          # 多轮会话（内存态，单 worker 前提）
+# ES-only 持久化（v5）：聊天历史 / 任务 / 反馈 / checkpoint——重启/多 worker 不丢。
+# 四个存储共用 make_es_client 出的连接配置（check_url 白名单钉在唯一出口）
+chat_store = ChatStore()
+feedback_store = FeedbackStore()
+checkpointer = EsCheckpointer()
+ingest_tasks = EsTaskRegistry()
+# LangGraph 编排（一张图全路由；checkpointer 挂自研 ES 版，thread_id 即会话键）。
+# 图是进程级单例：节点都是无状态薄壳（检索/分类组件闭包引用），并发请求
+# 靠各自的 state + configurable.thread_id 隔离，不共享可变状态
+graph = build_graph(classifier, rag, mcp, llm, chat_store,
+                    checkpointer=checkpointer, knowledges=[KB_ID])
 
 
 # ===========================================================================
@@ -128,7 +144,12 @@ GUARDS = [Depends(require_api_key), Depends(rate_limit)]
 @app.on_event("startup")
 async def startup_ingest():
     """索引不存在时自动入库五类样例（幂等；生产入库走 celery 任务，
-    demo 在服务启动时完成，等价保证"检索接口可用"的前置条件）。"""
+    demo 在服务启动时完成，等价保证"检索接口可用"的前置条件）。
+    v5：同时确保 ES-only 持久化四索引（聊天/任务/反馈/checkpoint）存在。"""
+    chat_store.ensure_index()
+    ingest_tasks.ensure_index()
+    feedback_store.ensure_index()
+    checkpointer.ensure_index()
     if not store.client.indices.exists(index=store.index_name):
         print("[startup] 索引不存在，自动入库样例…", flush=True)
         store.ensure_index(reset=False)
@@ -167,8 +188,8 @@ async def healthz():
 # ===========================================================================
 class AssistantRunPayload(BaseModel):
     """对照 agent_core/schema.py CreateAssitantRunPayload（demo 取核心字段：
-    question 必填；thread_id 是多轮会话标识——同一 thread_id 的追问会带上
-    最近历史做查询改写（sessions.py，进程内存态，重启即清）；
+    question 必填；thread_id 是多轮会话标识——同一 thread_id 的追问经
+    graph.load_context 读 ES 历史做查询改写（重启不丢，v5 起 ES 持久化）；
     transaction_id 兼作 langfuse trace id）。"""
     question: str
     assistant_uuid: str = "rag-lab-assistant"
@@ -211,17 +232,17 @@ def _dump(messages: list) -> str:
 
 
 async def assistant_stream(payload: AssistantRunPayload,
-                           parent_trace_id: Optional[str]):
-    """消息流 generator —— 复刻 AssistantService.stream(:1490-1618) 的分流 +
-    _stream_preset_response 的消息序列（生产：preset 分支也是 agent 消息流）。
+                           parent_trace_id: Optional[str],
+                           idem_key: Optional[str] = None):
+    """消息流 generator —— v5：分流在 graph.py（StateGraph 五路），本函数只做
+    ①幂等重放判断 ②图调用 ③最终 state → SSE 消息序列的翻译（v4 契约不变）。
 
-    生产差异（注释对照）：
-      · input_defence_by_prompt 安全校验（:1500）demo 跳过（注入防御在
-        检索侧做了，见 rag_demo._strip_injected；输入侧安全词库未复刻）
-      · 50s 超时 wrapper（:1578-1597）—— demo 依赖各客户端自身 timeout
-      · 会话：生产 langgraph checkpoint 持久化 thread；demo 进程内存
-        SessionStore + 追问改写（同一 thread_id 连续对话有效）
-    """
+    幂等键（网关职责，v5 新增）：请求带 Idempotency-Key 且 ES 聊天记录里已有
+    同键轮次 → 直接重放已存答案（不重执行图、不重复落历史）——客户端重试/
+    网络重发不会产生重复回答与重复计费。
+
+    会话（v5）：多轮历史不再放进程内存——graph 的 load_context/persist 节点
+    读写 ES（raglab_chat_messages），服务重启后同 thread_id 续聊仍在。"""
     question = payload.question
     # 多轮会话：thread_id 由客户端携带（连续对话传同一个）；不传则新会话
     thread_id = payload.thread_id or str(uuid.uuid4())
@@ -230,8 +251,8 @@ async def assistant_stream(payload: AssistantRunPayload,
 
     # langfuse trace（生产以 transaction_id 兼作 langfuse_parent_id，
     # assistant_run.py:19-20；demo 直接作 trace id）。trace_scope 把它设为
-    # 当前 async 上下文的活跃 trace——后续分类/检索/重排/生成/嵌入等所有
-    # 链内埋点（obs.span / generation_call）自动挂到这条 trace 上
+    # 当前 async 上下文的活跃 trace——图内各节点（分类/检索/重排/生成/MCP）
+    # 的 obs 埋点经 contextvars 自动挂到这条 trace 上
     trace = obs.trace(name="assistant_stream", input=question,
                       metadata={"assistant_uuid": payload.assistant_uuid},
                       id=parent_trace_id or transaction_id)
@@ -245,62 +266,79 @@ async def assistant_stream(payload: AssistantRunPayload,
             transaction_id, thread_id, payload.assistant_uuid, "user"))
         yield [human_msg]
 
-        # 追问改写（生产在 agent 的历史组装内完成）：有历史时把"那它呢"
-        # 类追问改写成独立问题再进分类+检索；无历史/失败原样使用
-        ask_question = await rewrite_query(llm, question,
-                                           sessions.history(thread_id))
-
         try:
-            # ③ 意图识别（生产 :1503-1506；埋点对照生产的分类 LLM 调用）
-            t0 = time.time()
-            classification = await classifier.classify_question(ask_question)
-            qtype = classification.get("type")
-            obs.generation(trace, name="question_classification",
-                           input=question, output=qtype.value if qtype else "?",
-                           model="Deepseek-v4-flash",
-                           metadata={"耗时": round(time.time() - t0, 2),
-                                     "confidence": classification.get("classification_confidence")})
+            # ③ 幂等（原子占位防并发竞态，v5.1）：create 抢占 idem:{key} 文档
+            #    · 抢到 → 本次执行，persist 节点回填该文档（同键至多一条）
+            #    · 已存在且有 answer → 直接重放（含引用 ToolMessage，事件
+            #      序列与首次一致，不重执行、不重复落历史）
+            #    · 已存在但无 answer → 首个同键请求仍在途，按普通请求执行
+            #    （"先查后写"存在 TOCTOU 窗口——两个并发同键请求会双执行；
+            #     ES 的 op_type=create 是版本级原子操作，抢占即去重）
+            replay, idem_doc_id = None, ""
+            if idem_key:
+                existing = await asyncio.to_thread(
+                    chat_store.claim_idem, idem_key, thread_id)
+                if existing is not None and existing.get("answer"):
+                    replay = existing
+                elif existing is not None:
+                    # 首个同键请求仍在途（占位无答案）：有界等待其完成——
+                    # 0.5s 轮询最多 60s（覆盖并发高压下的 LLM+重排时延），
+                    # 等到答案即重放；超时才按普通请求执行（极端兜底）
+                    print("[幂等] 同键请求在途，等待其完成…", flush=True)
+                    for _ in range(120):
+                        await asyncio.sleep(0.5)
+                        existing = await asyncio.to_thread(
+                            chat_store.find_by_idem, idem_key)
+                        if existing and existing.get("answer"):
+                            replay = existing
+                            break
+                    if replay is None:
+                        print("[幂等] 在途等待超时，按普通流程执行", flush=True)
+                else:
+                    idem_doc_id = f"idem:{idem_key}"
 
-            # ④ OTHER 类：分类器已让 LLM 直答（生产 :1511-1527）
-            if classification.get("llm_response"):
-                answer = classification["llm_response"]
-                route = "llm_response"
-            # ⑤ 预设回复（生产 :1530-1545）
-            elif classification.get("preset_response"):
-                answer = classifier.get_preset_content(classification["preset_response"]) \
-                         or "抱歉，我暂时无法回答这个问题。"  # 生产 :2360-2361 兜底话术
-                route = "preset_response"
+            if replay:
+                answer = replay.get("answer", "")
+                route = replay.get("route", "")
+                citations = replay.get("citations") or []
+                print(f"[幂等] Idempotency-Key 命中，重放已存答案"
+                      f"（route={route}，不重执行）", flush=True)
+                if route in ("knowledge_retrieve", "hybrid"):
+                    tool_msg = ToolMessage(
+                        content=json.dumps(citations, ensure_ascii=False),
+                        name="knowledges_retrieve",
+                        tool_call_id=run_id,
+                        response_metadata={
+                            "kb_empty": not citations,
+                            **_meta(transaction_id, thread_id,
+                                    payload.assistant_uuid, "retriever")})
+                    yield [tool_msg]
             else:
-                # ⑥ mcp 分支（生产 :1547-1568）：MCP 查询成功直接作答
-                # （route=mcp，不产生引用 ToolMessage）；失败降级知识检索
-                answer = None
-                if qtype == QuestionType.MCP_QUERY:
-                    answer = await mcp.aquery(ask_question)
-                    if answer is not None:
-                        route = "mcp"
-                    else:
-                        print("  [分流] mcp 查询失败，按生产降级语义转知识检索",
-                              flush=True)
-                if answer is None:
-                    # 知识检索（生产 :1609-1616 走 agent；demo 直连检索服务）。
-                    # 检索内各阶段（三路召回/RRF/去重/重排/生成）的埋点经
-                    # trace_scope 的 contextvars 自动挂本 trace（生产走 langchain
-                    # callback 通道，knowledge.py:84/:113-117，demo 直调等价）
-                    t0 = time.time()
-                    ret = await knowledges_retrieve(rag, ask_question, [KB_ID],
-                                                    max_recalls=4, min_score=0.5)
-                    docs = ret["source_documents"]
-                    answer = ret["result"] or "没有匹配到相关知识，无法回答该问题。"
-                    route = "knowledge_retrieve"
+                # ④ 图调用（生产 :1490-1618 分流的 v5 形态）：一次 ainvoke 完成
+                # 意图路由 + 对应分支执行 + 历史落库；状态逐步 checkpoint 到 ES。
+                # obs 埋点不在此层：请求入口 trace_scope 设的 contextvars 会
+                # 随 asyncio 任务复制传播进图的每个节点（langfuse 上已验证
+                # graph_load_context/rewrite/classify + 检索各阶段 span 挂树）
+                state = await ask_graph(graph, question, thread_id=thread_id,
+                                        transaction_id=transaction_id,
+                                        idem_key=idem_key or "",
+                                        idem_doc_id=idem_doc_id)
+                answer = state.get("answer") or "没有匹配到相关知识，无法回答该问题。"
+                route = state.get("route", "")
+                docs = state.get("source_documents") or []
+                qtype = state.get("classification", {}).get("type")
+                trace and trace.update(metadata={
+                    "route": route, "type": getattr(qtype, "value", "?")})
+                # 引用消息：生产知识库 tool 的 ToolMessage（to_sse:186-193 靠
+                # response_metadata.kb_empty 统计知识命中）。v5 起 hybrid 分支
+                # 同样带知识引用，一并输出
+                if route in ("knowledge_retrieve", "hybrid"):
                     obs.generation(trace, name="knowledges_retrieve",
                                    input=question,
                                    output=[{"title": d.title, "score": d.score}
                                            for d in docs],
                                    model="hybrid+rerank",
-                                   metadata={"耗时": round(time.time() - t0, 2),
-                                             "kb_empty": not docs})
-                    # 引用消息：生产知识库 tool 的 ToolMessage（to_sse:186-193 靠
-                    # response_metadata.kb_empty 统计知识命中）
+                                   metadata={"kb_empty": not docs})
                     tool_msg = ToolMessage(
                         content=json.dumps(
                             [{"title": d.title, "score": d.score,
@@ -315,7 +353,7 @@ async def assistant_stream(payload: AssistantRunPayload,
                                                    payload.assistant_uuid, "retriever")})
                     yield [tool_msg]
 
-            # ⑦ 回答消息（生产为 token 级流；demo 按 ~40 字切片同 id 消息块模拟）
+            # ⑤ 回答消息（生产为 token 级流；demo 按 ~40 字切片同 id 消息块模拟）
             duration = round(time.time() - t_start, 2)
             chunk_size, i = 40, 0
             while i * chunk_size < len(answer):
@@ -326,10 +364,8 @@ async def assistant_stream(payload: AssistantRunPayload,
                 yield [ai_msg]
                 await asyncio.sleep(0.05)          # 肉眼可见的"流式"节奏
                 i += 1
-            # 多轮会话：记录本轮（原始问题 + 完整回答），供下一轮改写消解指代
-            sessions.append(thread_id, question, answer)
-            trace and trace.update(output=answer, metadata={
-                "route": route, "type": qtype.value if qtype else "?"})
+            # 多轮历史由图的 persist 节点落 ES（本函数不再写会话存储）
+            trace and trace.update(output=answer, metadata={"route": route})
         except Exception as ex:
             # 生产 to_sse:204-215：错误不外泄细节
             yield {"event": "error",
@@ -365,58 +401,30 @@ async def create_stream(
             default=None, alias="langfuse_parent_trace_id"),
         langfuse_parent_observation_id: Optional[str] = Header(
             default=None, alias="langfuse_parent_observation_id"),
+        idempotency_key: Optional[str] = Header(
+            default=None, alias="Idempotency-Key"),
 ):
     """对照 assistant_run.py:32-48：header 两个 langfuse 父节点 id 透传给
-    观测层（demo 用作 trace id；生产挂进 langfuse 的 parent 链）。"""
+    观测层（demo 用作 trace id；生产挂进 langfuse 的 parent 链）。
+    v5 新增 Idempotency-Key（可选）：同键重复请求重放已存答案（见
+    assistant_stream ③）。"""
     print("=" * 60, flush=True)
-    print(f"[stream] question={payload.question[:40]}", flush=True)
+    print(f"[stream] question={payload.question[:40]}"
+          + (f" idem={idempotency_key[:16]}" if idempotency_key else ""),
+          flush=True)
     return EventSourceResponse(to_sse(assistant_stream(
-        payload, langfuse_parent_trace_id or langfuse_parent_observation_id)))
+        payload, langfuse_parent_trace_id or langfuse_parent_observation_id,
+        idem_key=idempotency_key)))
 
 
 # ===========================================================================
 # 接口 ① POST /api/v1/knowledge/upload —— 解析入库（异步任务化）
 #    对照生产上传链路：server/api/v1/knowledge.py 上传 → 文件落盘（本地
 #    存储模式）→ celery 任务 file_ingest(ingest.py:86) / knowledge_faq_
-#    batch_ingest(ingest.py:653)。demo 用 BackgroundTasks + 进程内任务表
-#    等价（单 worker 前提；多 worker/重启丢任务态，生产接队列+DB）。
+#    batch_ingest(ingest.py:653)。demo 用 BackgroundTasks + ES 任务表
+#    （raglab_tasks，v5 起——重启/多 worker 任务状态不丢，对应生产的
+#    队列+DB 形态）。
 # ===========================================================================
-class IngestTaskRegistry:
-    """入库任务内存表：task_id → 状态（running/done/failed）——demo 的
-    "最小 celery"，GET /tasks/{id} 轮询进度（对应生产的任务状态接口）。"""
-
-    def __init__(self):
-        self._tasks: Dict[str, Dict[str, Any]] = {}
-        self._lock = threading.Lock()              # BackgroundTasks 线程池并发写
-
-    def create(self, file_name: str, chain: str, kb_id: str) -> str:
-        task_id = str(uuid.uuid4())
-        with self._lock:
-            self._tasks[task_id] = {
-                "task_id": task_id, "file": file_name, "chain": chain,
-                "knowledge_base_id": kb_id, "status": "running",
-                "chunks": None, "replaced": None, "error": None,
-                "started_at": datetime.now().strftime("%H:%M:%S"),
-                "finished_at": None}
-        return task_id
-
-    def finish(self, task_id: str, chunks: int, replaced: int, error: str = None):
-        with self._lock:
-            task = self._tasks.get(task_id)
-            if task:
-                task.update({"status": "failed" if error else "done",
-                             "chunks": None if error else chunks,
-                             "replaced": replaced, "error": error,
-                             "finished_at": datetime.now().strftime("%H:%M:%S")})
-
-    def get(self, task_id: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            return self._tasks.get(task_id)
-
-
-ingest_tasks = IngestTaskRegistry()
-
-
 def _run_ingest_task(task_id: str, dest: str, chain: str, kb_id: str,
                      column_question: int, column_answer: int):
     """后台入库任务体（BackgroundTasks 的线程池里跑，无请求上下文——obs
@@ -525,9 +533,6 @@ async def knowledges_retrieve_api(call_body: KnowledgesRetrieveRequest):
 # ===========================================================================
 # 接口 ③ POST /api/v1/feedback —— 点赞/点踩（质量运营原始数据）
 # ===========================================================================
-FEEDBACK_DIR = Path(__file__).resolve().parent / "feedback"
-
-
 class FeedbackPayload(BaseModel):
     """单条反馈：rating=up/down；question/answer 由客户端回传（服务无会话
     持久化，与生产的反馈表同位）。"""
@@ -540,20 +545,17 @@ class FeedbackPayload(BaseModel):
 
 @app.post("/api/v1/feedback", dependencies=GUARDS)
 async def feedback(payload: FeedbackPayload):
-    """反馈落盘 feedback/feedback.jsonl（一行一条）——"线上反馈 → 离线评估"
-    回流的原始数据：定期从 down 里挑 badcase 补进 eval_set.jsonl 再跑
-    ragas 基线对比，即成质量运营闭环。"""
+    """反馈落 ES（raglab_feedback，v5 起——原 jsonl 文件改 ES-only）——
+    "线上反馈 → 离线评估"回流的原始数据：定期从 down 里挑 badcase 补进
+    eval_set.jsonl 再跑 ragas 基线对比，即成质量运营闭环。"""
     if payload.rating not in ("up", "down"):
         return JSONResponse({"code": 400, "msg": "rating 仅支持 up/down",
                              "data": {}}, status_code=400)
-    FEEDBACK_DIR.mkdir(exist_ok=True)
-    line = {"ts": datetime.now().isoformat(timespec="seconds"),
-            "rating": payload.rating,
-            "question": payload.question[:500],
-            "answer": payload.answer[:1000],
-            "route": payload.route, "thread_id": payload.thread_id}
-    with (FEEDBACK_DIR / "feedback.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    await asyncio.to_thread(feedback_store.add, {
+        "rating": payload.rating,
+        "question": payload.question[:500],
+        "answer": payload.answer[:1000],
+        "route": payload.route, "thread_id": payload.thread_id})
     return {"code": 200, "msg": "success", "data": {}}
 
 
